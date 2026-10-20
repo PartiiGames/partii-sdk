@@ -1,0 +1,22 @@
+[package]
+name = "partii-account"
+description = "The player's partii account inside a game: guest sign-in per device, entitlements cached for offline play, cloud saves with conflict merging, checkout, achievements and analytics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["gamedev", "accounts", "achievements", "partii"]
+categories = ["game-development"]
+
+[dependencies]
+partii-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+getrandom = "0.3"
+
+[dev-dependencies]
+sha2 = "0.10"

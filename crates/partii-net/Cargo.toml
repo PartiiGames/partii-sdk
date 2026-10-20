@@ -1,0 +1,54 @@
+[package]
+name = "partii-net"
+description = "partii networking for games: rooms and join codes, peer-to-peer WebRTC with relay fallback, recovery, and the partii-host client transport plus the netcode kit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["gamedev", "multiplayer", "webrtc", "netcode", "partii"]
+categories = ["game-development", "network-programming"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+partii-protocol.workspace = true
+partii-netcode.workspace = true
+base64 = "0.22"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+default = ["native"]
+native = ["dep:tokio", "dep:tokio-tungstenite", "dep:webrtc", "dep:async-channel", "dep:bytes", "dep:async-trait", "dep:futures-util"]
+
+[dependencies.tokio]
+workspace = true
+optional = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
+webrtc = { package = "partii-webrtc", version = "0.21.0", path = "../../webrtc/webrtc", optional = true }
+async-channel = { version = "2", optional = true }
+bytes = { version = "1", optional = true }
+async-trait = { version = "0.1", optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
+log = "0.4"
+getrandom = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+web-sys = { version = "0.3", features = [
+  "Window", "WebSocket", "MessageEvent", "BinaryType", "CloseEvent",
+  "RtcPeerConnection", "RtcConfiguration", "RtcIceTransportPolicy", "RtcDataChannel", "RtcDataChannelInit",
+  "RtcDataChannelEvent", "RtcDataChannelState", "RtcDataChannelType", "RtcSessionDescriptionInit", "RtcSdpType",
+  "RtcIceCandidate", "RtcIceCandidateInit", "RtcPeerConnectionIceEvent", "RtcPeerConnectionState",
+] }

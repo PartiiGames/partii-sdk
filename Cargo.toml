@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/partii-protocol",
+    "crates/partii-netcode",
+    "crates/partii-client",
+    "crates/partii-net",
+    "crates/partii-account",
+    "crates/partii-content",
+    "crates/partii-server",
+    "crates/bevy_partii",
+    "crates/partii",
+    "webrtc/webrtc",
+    "webrtc/rtc",
+    "webrtc/rtc-sctp",
+    "webrtc/rtc-datachannel",
+]
+# Examples build on their own (one is a wasm32 game server, one pulls in Bevy).
+exclude = ["examples/echo-server", "examples/bevy-rooms"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Luzzotica LLC"]
+repository = "https://github.com/PartiiGames/partii-sdk"
+homepage = "https://partii.games"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+partii-protocol = { version = "0.1.0", path = "crates/partii-protocol" }
+partii-netcode = { version = "0.1.0", path = "crates/partii-netcode" }
+partii-client = { version = "0.1.0", path = "crates/partii-client" }
+partii-net = { version = "0.1.0", path = "crates/partii-net", default-features = false }
+partii-account = { version = "0.1.0", path = "crates/partii-account" }
+partii-content = { version = "0.1.0", path = "crates/partii-content" }
+partii-server = { version = "0.1.0", path = "crates/partii-server" }

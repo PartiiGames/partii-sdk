@@ -1,0 +1,18 @@
+[package]
+name = "partii-client"
+description = "Client for partii's public API: every operation as one table (generated from the public OpenAPI spec) plus a small blocking HTTP runner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["gamedev", "api", "client", "partii"]
+categories = ["game-development", "api-bindings"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "3", features = ["json"] }

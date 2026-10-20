@@ -1,0 +1,160 @@
+name: cargo
+
+on:
+  push:
+    branches: [ master, v0.21.x, v0.20.x, v0.17.x ]
+  pull_request:
+    branches: [ master, v0.21.x, v0.20.x, v0.17.x ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-os:
+    name: Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ 'ubuntu-latest', 'macos-latest', 'windows-latest' ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Build
+        run: cargo build --verbose
+
+  build-no-features:
+    name: Build with No Default Features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Build
+        run: cargo build --verbose --no-default-features
+
+  test-features:
+    name: Unit Test with ${{ matrix.features }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          # A crypto provider is paired with each runtime: this job varies the *runtime*, and a
+          # peer connection cannot be constructed without a provider. The no-provider
+          # configuration is covered separately by `crypto-provider-features`.
+          - 'runtime-smol,crypto-ring'
+          - 'runtime-mock,crypto-ring'
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Build
+        run: cargo test --lib --verbose --no-default-features --features ${{ matrix.features }}
+
+  crypto-provider-features:
+    name: Crypto provider (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            args: ""
+          - name: ring only
+            args: --no-default-features --features runtime-tokio,crypto-ring
+          - name: aws-lc-rs only
+            args: --no-default-features --features runtime-tokio,crypto-aws-lc-rs
+          # Both backends in one graph. The core crates rejected this before G3; here it is the
+          # guard that the forwarding features stay additive and that `ring` remains the resolved
+          # default, which `tests/crypto_provider_features.rs` asserts.
+          - name: ring + aws-lc-rs
+            args: --features crypto-ring,crypto-aws-lc-rs
+          # No built-in provider: an application must supply its own through
+          # `SettingEngine::set_crypto_provider`.
+          - name: no built-in provider
+            args: --no-default-features --features runtime-tokio
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Build
+        run: cargo build --all-targets --verbose ${{ matrix.args }}
+      - name: Feature-semantics tests
+        run: cargo test --test crypto_provider_features --verbose ${{ matrix.args }}
+      # End-to-end: ICE/STUN integrity, the DTLS handshake, and SRTP media over a real
+      # connection, per provider pairing. Skipped in the no-built-in configuration, where the
+      # test file is `#![cfg]`-ed out.
+      - name: Provider integration tests
+        run: cargo test --test crypto_provider_integration --verbose ${{ matrix.args }}
+
+  crypto-provider-boundary:
+    name: Crypto stays in the core crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      # The async layer forwards provider features and threads the provider through; it must not
+      # depend on a crypto implementation or perform crypto itself. The script parses dependency
+      # sections so that feature forwarding (`ring = ["rtc/crypto-ring"]`) is not mistaken for one.
+      - name: No crypto implementation dependency in webrtc
+        run: python3 scripts/check-crypto-boundary.py
+      # Every send on one of the four bounded internal channels must declare what it does when
+      # the channel is full — block the application, drop a flag-backed nudge, park a detached
+      # task, or discard. The script only checks that a decision was recorded at the site; it
+      # cannot tell a correct classification from a wrong one, but an *absent* one is how
+      # webrtc#858 got in. See docs/internal-channel-overflow-policy.md.
+      - name: Bounded channels declare an overflow policy
+        run: python3 scripts/check-channel-overflow-policy.py
+      # No packaging check here: `webrtc` cannot be packaged until the core crates are
+      # published — cargo resolves against the registry and the path dependency is stripped
+      # from the published manifest, so `cargo package` builds against whatever `rtc` is on
+      # crates.io rather than the submodule. Publication order is rtc-crypto, then the rtc
+      # protocol crates, then rtc, then webrtc. Add a plain `cargo package` step once rtc
+      # 0.21.0 is out.
+
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ 'ubuntu-latest' ] #, 'macos-latest', 'windows-latest' ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Run tests
+        run: cargo test --verbose
+
+  rustfmt_and_clippy:
+    name: Check rustfmt style && run clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: clippy, rustfmt
+          override: true
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+      - name: Check formating
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check

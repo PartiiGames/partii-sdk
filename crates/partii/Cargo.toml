@@ -1,0 +1,38 @@
+[package]
+name = "partii"
+description = "The partii SDK for Rust games: rooms and peer-to-peer networking, partii-host matches, player accounts, live content and the API client, behind features."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["gamedev", "multiplayer", "sdk", "partii"]
+categories = ["game-development", "network-programming"]
+
+[features]
+default = ["net", "account", "client"]
+## Rooms, WebRTC peer-to-peer, relays, the partii-host transport and the netcode kit.
+net = ["dep:partii-net", "partii-net/native"]
+## Guest sign-in, ownership, saves, checkout, achievements.
+account = ["dep:partii-account", "client"]
+## Live content channels.
+content = ["dep:partii-content", "client"]
+## The API client.
+client = ["dep:partii-client"]
+## Write a partii-host game server (wasm32-unknown-unknown).
+server = ["dep:partii-server"]
+
+[dependencies]
+partii-protocol.workspace = true
+partii-netcode.workspace = true
+partii-net = { workspace = true, optional = true }
+partii-account = { workspace = true, optional = true }
+partii-content = { workspace = true, optional = true }
+partii-client = { workspace = true, optional = true }
+partii-server = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+all-features = true

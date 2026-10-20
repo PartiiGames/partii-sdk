@@ -1,0 +1,15 @@
+[package]
+name = "partii-netcode"
+description = "Reliability by redundancy over unreliable datagrams: sequence numbers, ack bitfields, redundant inputs and state deltas. no_std; same wire format as partii's JS kit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["gamedev", "netcode", "udp", "multiplayer", "partii"]
+categories = ["game-development", "network-programming", "no-std"]
+
+[dependencies]

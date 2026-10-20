@@ -1,0 +1,21 @@
+[package]
+name = "echo-server"
+version = "0.1.0"
+description = "Example partii-host game server built with partii-server: echoes each player's position to everyone."
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone: cargo build --release --target wasm32-unknown-unknown
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+partii-server = { path = "../../crates/partii-server" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"

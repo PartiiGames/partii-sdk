@@ -1,0 +1,18 @@
+[package]
+name = "partii-server"
+description = "Write server-authoritative game servers for partii-host in Rust: a Game trait, one macro that exports the partii-host ABI for wasm32-unknown-unknown, and a native test harness that simulates the host (clock, players, packet loss, datagram limits)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["gamedev", "multiplayer", "server", "wasm", "partii"]
+categories = ["game-development", "network-programming", "wasm"]
+
+[dependencies]
+partii-protocol.workspace = true
+partii-netcode.workspace = true
+serde_json.workspace = true

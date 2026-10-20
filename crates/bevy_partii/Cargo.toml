@@ -1,0 +1,26 @@
+[package]
+name = "bevy_partii"
+description = "Bevy plugin for partii: player sign-in and ownership as resources, rooms and join codes, peer-to-peer messages, partii-host match seats and achievements, delivered as Bevy messages."
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["bevy", "gamedev", "multiplayer", "partii"]
+categories = ["game-development", "network-programming"]
+
+[features]
+default = ["net", "account"]
+net = ["dep:partii-net", "partii-net/native"]
+account = ["dep:partii-account"]
+
+[dependencies]
+bevy_app = { version = "0.20", default-features = false }
+bevy_ecs = { version = "0.20", default-features = false }
+partii-protocol.workspace = true
+partii-net = { workspace = true, optional = true }
+partii-account = { workspace = true, optional = true }
+serde_json.workspace = true

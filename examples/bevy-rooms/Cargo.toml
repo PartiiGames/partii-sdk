@@ -1,0 +1,14 @@
+[package]
+name = "bevy-rooms"
+version = "0.1.0"
+description = "Minimal Bevy game on partii: sign in as a guest, create or join a room by code, and two players move over partii-net."
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+bevy_app = "0.20"
+bevy_ecs = "0.20"
+bevy_partii = { path = "../../crates/bevy_partii" }
