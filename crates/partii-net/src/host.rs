@@ -11,6 +11,14 @@
 //! ([`partii_protocol::host::seal`]). With no key, packets go untagged: that's
 //! the local-development form a host without ticket keys accepts, where the
 //! ticket is `"<match>\n<player>[\n<info JSON>]"`.
+//!
+//! **When a match moves.** partii runs hosted matches through a directory that
+//! can move a match to another host (its host died) at a new generation;
+//! tickets carry the generation and a host refuses any other. So on
+//! [`SeatEvent::Closed`], ask partii for a fresh endpoint (for a jam: send the
+//! jam socket's `join` again) and join that. To notice a dead host quickly,
+//! join with [`join_with`] and a short silence, e.g. 1.5 s for a game that
+//! sends state every tick.
 
 use base64::Engine;
 use partii_protocol::host::{self as wire, Endpoint};
@@ -114,10 +122,23 @@ fn resolve(addr: &str, opts: &SeatOptions) -> Result<SocketAddr, String> {
     Ok(a)
 }
 
-/// Join a seat. `on` is called from the seat's reader thread.
+/// Join a seat. `on` is called from the seat's reader thread. The seat closes
+/// after [`SILENT`] with no word from the host.
 pub fn join(
     endpoint: &Endpoint,
     opts: &SeatOptions,
+    on: impl Fn(SeatEvent) + Send + 'static,
+) -> Result<Seat, String> {
+    join_with(endpoint, opts, SILENT, on)
+}
+
+/// [`join`], closing the seat after `silent` with no word from the host (after
+/// it first answered): how fast a dead host is noticed, so the seat can ask
+/// for a new endpoint.
+pub fn join_with(
+    endpoint: &Endpoint,
+    opts: &SeatOptions,
+    silent: Duration,
     on: impl Fn(SeatEvent) + Send + 'static,
 ) -> Result<Seat, String> {
     let to = resolve(&endpoint.udp, opts)?;
@@ -138,8 +159,12 @@ pub fn join(
     let sock = UdpSocket::bind(if to.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })
         .map_err(|e| e.to_string())?;
     sock.connect(to).map_err(|e| e.to_string())?;
-    sock.set_read_timeout(Some(Duration::from_millis(500)))
-        .map_err(|e| e.to_string())?;
+    sock.set_read_timeout(Some(
+        Duration::from_millis(250)
+            .min(silent / 2)
+            .max(Duration::from_millis(50)),
+    ))
+    .map_err(|e| e.to_string())?;
     let shared = Arc::new(Shared {
         sock: sock.try_clone().map_err(|e| e.to_string())?,
         key,
@@ -185,7 +210,7 @@ pub fn join(
                         _ => {}
                     }
                 }
-                Err(_) if heard.elapsed() > SILENT => {
+                Err(_) if heard.elapsed() > if joined { silent } else { SILENT } => {
                     break Some("no word from the game server".into())
                 }
                 // The JOIN is a datagram too: say it again until the host answers.
@@ -250,6 +275,44 @@ mod tests {
         host.send_to(&wire::seal(&key, wire::TO_CLIENT, 1, b"\x03old"), from)
             .unwrap();
         assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    /// A host that answers and then goes quiet: join_with closes the seat after its silence.
+    #[test]
+    fn a_quiet_host_closes_the_seat_after_the_silence() {
+        let host = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let ep = Endpoint {
+            udp: host.local_addr().unwrap().to_string(),
+            ticket: "m\\np".into(),
+            key: String::new(),
+        };
+        let (tx, rx) = mpsc::channel();
+        let _seat = join_with(
+            &ep,
+            &SeatOptions::default(),
+            Duration::from_millis(400),
+            move |e| {
+                let _ = tx.send(e);
+            },
+        )
+        .unwrap();
+        let mut buf = [0u8; 2048];
+        let (_, from) = host.recv_from(&mut buf).unwrap();
+        host.send_to(b"\x03hi", from).unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            SeatEvent::Frame(b"\x03hi".to_vec())
+        );
+        let t0 = Instant::now();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+            SeatEvent::Closed(_)
+        ));
+        assert!(
+            t0.elapsed() < Duration::from_millis(1500),
+            "closed after {:?}",
+            t0.elapsed()
+        );
     }
 
     #[test]
