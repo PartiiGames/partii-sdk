@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `partii-client`: the referral portal (`referralsVisit`, `referralsHistory`, `referralsDashboard`; CLI `partii referrals visit|history|dashboard`) and a project's Stripe dashboard link (`payoutsDashboard`; CLI `partii payouts dashboard`). Additive.
+- `partii-client`: the referral portal (`referralsVisit`, `referralsHistory`, `referralsDashboard`; CLI `partii referrals visit|history|dashboard`) a project's Stripe dashboard link (`payoutsDashboard`; CLI `partii payouts dashboard`), and the sales of the projects a player runs as a developer (`playerProjectsEarnings`; CLI `partii earnings projects`). Additive.
 
 ## 0.1.0 (unreleased)
 
