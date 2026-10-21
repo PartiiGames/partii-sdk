@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `partii-client`: the referral portal (`referralsVisit`, `referralsHistory`, `referralsDashboard`; CLI `partii referrals visit|history|dashboard`) and a project's Stripe dashboard link (`payoutsDashboard`; CLI `partii payouts dashboard`). Additive.
+
 ## 0.1.0 (unreleased)
 
 First public release.
