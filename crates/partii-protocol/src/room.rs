@@ -36,7 +36,10 @@ pub struct Member {
     pub status: String,
     /// The member's game build fingerprint, when it sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub net_version: Option<String>,
+    pub net_version: Option<String>,    /// The partii player this member's session proved with a `player_token`
+    /// (set only by the edge; only the host's views carry it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_id: Option<String>,
 }
 
 /// Derives `Default` for the same reason as [`Member`].
