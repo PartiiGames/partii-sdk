@@ -536,6 +536,14 @@ impl Engine {
     pub fn report(&self, metrics: Value) {
         self.act(|c| c.report(metrics))
     }
+    /// The app is going to the background: hold the seat. See `Core::away`.
+    pub fn away(&self) -> u32 {
+        self.act(|c| c.away())
+    }
+    /// Back in the foreground on a socket that never dropped. See `Core::back`.
+    pub fn back(&self) -> u32 {
+        self.act(|c| c.back())
+    }
     pub fn online(&self) -> bool {
         self.sh.borrow().core.online()
     }
@@ -553,7 +561,8 @@ pub struct WebEngine {
 
 #[wasm_bindgen]
 impl WebEngine {
-    /// `config`: `{edge, key, conn?, client?, player_token?, no_webrtc?}` (JSON).
+    /// `config`: `{edge, key, conn?, client?, player_token?, no_webrtc?, away?}` (JSON).
+    /// `"away": true` opts in to the away grace (off by default).
     #[wasm_bindgen(constructor)]
     pub fn new(config: &str) -> Result<WebEngine, JsValue> {
         let cfg: Config =
@@ -600,7 +609,7 @@ impl WebEngine {
         )
     }
 
-    /// `create` with room settings as JSON, e.g. `{"max_members":32,"kinds":{"game":{"joinable":false}}}`.
+    /// `create` with room settings as JSON, e.g. `{"max_members":32,"kinds":{"game":{"joinable":false}},"away_grace_ms":60000}`.
     #[wasm_bindgen(js_name = createWith)]
     pub fn create_with(
         &self,
@@ -619,7 +628,7 @@ impl WebEngine {
         )
     }
 
-    /// Host only: change the room (`{"joinable":false}`, `{"kinds":{...}}`, `{"meta":...}`).
+    /// Host only: change the room (`{"joinable":false}`, `{"kinds":{...}}`, `{"meta":...}`, `{"away_grace_ms":60000}`).
     pub fn update(&self, patch: &str) {
         self.e
             .update(serde_json::from_str(patch).unwrap_or(Value::Null))
@@ -640,6 +649,20 @@ impl WebEngine {
 
     pub fn leave(&self) {
         self.e.leave()
+    }
+
+    /// The page is going to the background (`visibilitychange` to hidden,
+    /// `pagehide`): hold this seat for the room's `away_grace_ms`. The reply
+    /// is an `away_held` event (`{req, reason, until, grace_ms}`) or `failed`
+    /// (`not_enabled` without `"away": true` in the config).
+    pub fn away(&self) -> u32 {
+        self.e.away()
+    }
+
+    /// Back in the foreground (visible again, `pageshow`) on a socket that
+    /// survived; a reconnect is back on its own. A no-op when not away.
+    pub fn back(&self) -> u32 {
+        self.e.back()
     }
 
     /// Send bytes to a member (0xFFFF = everyone).

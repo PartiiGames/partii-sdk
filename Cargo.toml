@@ -19,7 +19,7 @@ members = [
 exclude = ["examples/echo-server", "examples/bevy-rooms"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -32,10 +32,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
-partii-protocol = { version = "0.1.0", path = "crates/partii-protocol" }
-partii-netcode = { version = "0.1.0", path = "crates/partii-netcode" }
-partii-client = { version = "0.1.0", path = "crates/partii-client" }
-partii-net = { version = "0.1.0", path = "crates/partii-net", default-features = false }
-partii-account = { version = "0.1.0", path = "crates/partii-account" }
-partii-content = { version = "0.1.0", path = "crates/partii-content" }
-partii-server = { version = "0.1.0", path = "crates/partii-server" }
+partii-protocol = { version = "0.2.0", path = "crates/partii-protocol" }
+partii-netcode = { version = "0.2.0", path = "crates/partii-netcode" }
+partii-client = { version = "0.2.0", path = "crates/partii-client" }
+partii-net = { version = "0.2.0", path = "crates/partii-net", default-features = false }
+partii-account = { version = "0.2.0", path = "crates/partii-account" }
+partii-content = { version = "0.2.0", path = "crates/partii-content" }
+partii-server = { version = "0.2.0", path = "crates/partii-server" }

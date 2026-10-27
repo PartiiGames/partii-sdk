@@ -36,10 +36,39 @@ pub struct Member {
     pub status: String,
     /// The member's game build fingerprint, when it sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub net_version: Option<String>,    /// The partii player this member's session proved with a `player_token`
+    pub net_version: Option<String>,
+    /// The partii player this member's session proved with a `player_token`
     /// (set only by the edge; only the host's views carry it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub player_id: Option<String>,
+    /// While the member is away (`status` is `suspended`): why, and until when
+    /// its seat is held. Only engines that opted in (hello `caps: ["away"]`) see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub away: Option<Away>,
+}
+
+/// The hello capability that opts an engine in to the away grace
+/// (PROTOCOL.md "Away").
+pub const AWAY_CAP: &str = "away";
+/// A room's away grace when the host sets none (ms).
+pub const DEFAULT_AWAY_GRACE_MS: u64 = 30_000;
+/// The edge clamps `away_grace_ms` to `MIN_AWAY_GRACE_MS..=MAX_AWAY_GRACE_MS`.
+pub const MIN_AWAY_GRACE_MS: u64 = 5_000;
+pub const MAX_AWAY_GRACE_MS: u64 = 300_000;
+
+/// Why a member is away: it said so (`"hint"`, an `away` request), or its
+/// socket dropped (`"dropped"`).
+pub const AWAY_HINT: &str = "hint";
+pub const AWAY_DROPPED: &str = "dropped";
+
+/// A member's away hold: `member.away`, and the body of `member_away`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Away {
+    /// [`AWAY_HINT`] or [`AWAY_DROPPED`].
+    pub reason: String,
+    /// Server time (ms since the epoch) when the seat goes: the member leaves
+    /// with reason `timeout` unless it is back first.
+    pub until: u64,
 }
 
 /// Derives `Default` for the same reason as [`Member`].
@@ -62,6 +91,11 @@ pub struct Room {
     /// The host's game build fingerprint, when it sent one (`net_version` on create).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub net_version: Option<String>,
+    /// How long an away member keeps its seat (ms; the host sets it with
+    /// `away_grace_ms` on create or update, default [`DEFAULT_AWAY_GRACE_MS`]).
+    /// Only engines that opted in (hello `caps: ["away"]`) see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub away_grace_ms: Option<u64>,
     #[serde(default)]
     pub meta: Value,
     pub members: Vec<Member>,
@@ -96,10 +130,28 @@ mod tests {
         };
         let back: Room = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
+        let old: Room = serde_json::from_str(r#"{"code":"A","game":"g","host":1,"you":1,"joinable":true,"max_members":8,"members":[{"mid":1,"kind":"game","name":"","status":"active"}]}"#).unwrap();
+        assert_eq!(old.away_grace_ms, None, "a room from an old edge (or not opted in) parses");
+        assert_eq!(old.members[0].away, None);
         assert!(
             valid_net_version("a1b2c3d4e5f6")
                 && !valid_net_version("")
                 && !valid_net_version("a b")
         );
+    }
+
+    #[test]
+    fn away_members_and_the_rooms_grace_parse() {
+        let r: Room = serde_json::from_str(r#"{"code":"A","game":"g","host":1,"you":2,"joinable":true,"max_members":8,"away_grace_ms":45000,"meta":null,
+            "members":[{"mid":1,"kind":"game","name":"H","meta":null,"status":"active"},
+                       {"mid":2,"kind":"phone","name":"P","meta":null,"status":"suspended","away":{"reason":"hint","until":1761500000000}}]}"#).unwrap();
+        assert_eq!(r.away_grace_ms, Some(45_000));
+        assert_eq!(r.members[0].away, None);
+        assert_eq!(
+            r.members[1].away,
+            Some(Away { reason: AWAY_HINT.into(), until: 1_761_500_000_000 })
+        );
+        let back: Room = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
     }
 }

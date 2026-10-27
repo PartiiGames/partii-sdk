@@ -21,7 +21,9 @@ const PC_RETRY_MS: [f64; 5] = [1000.0, 2000.0, 4000.0, 8000.0, 10000.0];
 const PC_OPEN_TIMEOUT_MS: f64 = 12_000.0;
 pub use partii_protocol::room::{BROADCAST, RELAY_BUNDLE, RELAY_FRAME};
 
+/// Fields left out of a JSON config (the web engine's) take their defaults.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// Edge base URL, e.g. `https://edge.partii.dev` (ws scheme derived).
     pub edge: String,
@@ -35,9 +37,18 @@ pub struct Config {
     pub player_token: Option<String>,
     /// Skip WebRTC paths (ws relay only); for tests and locked-down hosts.
     pub no_webrtc: bool,
+    /// Opt in to the away grace (PROTOCOL.md "Away"); off by default, so an
+    /// engine behaves exactly as before. On, the engine says `caps: ["away"]`
+    /// in its hello: a dropped socket (a phone frozen in the background)
+    /// keeps its seat for the room's `away_grace_ms` (default 30 s) instead
+    /// of 20 s, others' presence arrives as [`Event::MemberAway`] /
+    /// [`Event::MemberBack`] instead of [`Event::MemberSuspended`] /
+    /// [`Event::MemberResumed`], and [`Core::away`] / [`Core::back`] work
+    /// (off, they answer `Failed { code: "not_enabled" }` and send nothing).
+    pub away: bool,
 }
 
-pub use partii_protocol::room::{IceServer, Member, Room};
+pub use partii_protocol::room::{Away, IceServer, Member, Room, AWAY_CAP};
 
 /// What the game sees.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -80,11 +91,42 @@ pub enum Event {
         mid: u16,
         reason: String,
     },
+    /// A member's socket dropped; its seat is held for a short grace. (What an
+    /// engine that didn't opt in to the away grace hears, or any engine on an
+    /// edge from before it; opted-in engines get [`Event::MemberAway`].)
     MemberSuspended {
         mid: u16,
     },
+    /// A suspended member is back in its seat (old-style; see [`Event::MemberBack`]).
     MemberResumed {
         mid: u16,
+    },
+    /// A member is away (PROTOCOL.md "Away"): its app went to the background
+    /// (`reason: "hint"`) or its socket dropped (`"dropped"`). It keeps its
+    /// seat (still in `room.members`, status `suspended`) until `until`
+    /// (server time, ms since the epoch; `grace_ms` is the hold's length) and
+    /// then leaves with `MemberLeft { reason: "timeout" }` unless it is back
+    /// first. Packets to it are dropped by the edge meanwhile; reliable ones
+    /// are resent once it's back. Show it as "away", don't free its seat.
+    MemberAway {
+        mid: u16,
+        reason: String,
+        until: u64,
+        grace_ms: u64,
+    },
+    /// An away member is back in its seat; its links come back up.
+    MemberBack {
+        mid: u16,
+    },
+    /// The edge took this engine's [`Core::away`]: its seat is held until
+    /// `until` (server ms; `grace_ms` long). If it isn't back by then (a
+    /// resume with the same `conn`, or [`Core::back`]), it leaves the room:
+    /// with its socket still up it gets `RoomClosed { reason: "timeout" }`.
+    AwayHeld {
+        req: u32,
+        reason: String,
+        until: u64,
+        grace_ms: u64,
     },
     RoomUpdated {
         room: Room,
@@ -94,6 +136,10 @@ pub enum Event {
     Resumed {
         room: Room,
     },
+    /// This engine is out of the room. `reason`: `ended`, `host_lost`,
+    /// `kicked`, `version_mismatch`, `expired` (the session was forgotten
+    /// while offline) or `timeout` (it said `away` and wasn't back in time,
+    /// its socket still up: the seat went; join again for a new one).
     RoomClosed {
         reason: String,
     },
@@ -182,6 +228,7 @@ struct Peer {
 enum Req {
     Create,
     Join,
+    Away,
     Other,
 }
 
@@ -214,6 +261,8 @@ pub struct Core {
     out: VecDeque<Action>,
     last_rx: f64,
     last_ping: f64,
+    /// This engine's own away hold (an `away` the edge took), until it's back.
+    away: Option<Away>,
 }
 
 impl Core {
@@ -233,6 +282,7 @@ impl Core {
             out: VecDeque::new(),
             last_rx: 0.0,
             last_ping: 0.0,
+            away: None,
         }
     }
 
@@ -247,6 +297,11 @@ impl Core {
     }
     pub fn online(&self) -> bool {
         matches!(self.sock, Sock::Up)
+    }
+    /// This engine's own away hold, between an `away` the edge took
+    /// ([`Event::AwayHeld`]) and being back (`back`, a resume, or leaving).
+    pub fn away_hold(&self) -> Option<&Away> {
+        self.away.as_ref()
     }
 
     /// Per-member link state: the path in use and what each path measures.
@@ -356,6 +411,7 @@ impl Core {
         self.create_with(game, kind, name, meta, json!({"max_members": max_members}))
     }
     /// `create` with room settings from the start: `{"max_members": 32, "kinds": {"game": {"joinable": false}}}`.
+    /// `away_grace_ms` (5000–300000, default 30000) sets how long an away member keeps its seat.
     pub fn create_with(
         &mut self,
         game: &str,
@@ -402,6 +458,8 @@ impl Core {
         self.left_room();
         id
     }
+    /// Host only: change the room, e.g. `{"joinable": false}` or
+    /// `{"away_grace_ms": 60000}` (holds already running keep their end).
     pub fn update(&mut self, patch: Value) -> u32 {
         let mut v = patch;
         v["t"] = json!("update");
@@ -420,6 +478,42 @@ impl Core {
             v["meta"] = m;
         }
         self.request(Req::Other, v)
+    }
+    /// The app is going to the background (PROTOCOL.md "Away"): hold this
+    /// engine's seat for the room's `away_grace_ms`. The reply is
+    /// [`Event::AwayHeld`] (or `Failed`: `not_in_room`, or `offline`, which is
+    /// harmless: a dropped socket is away on its own). The socket may drop
+    /// any time after; reconnecting with the same `conn` is back on its own.
+    /// Saying it twice changes nothing. Needs [`Config::away`]; without it
+    /// this sends nothing and answers `Failed { code: "not_enabled" }`.
+    pub fn away(&mut self) -> u32 {
+        if !self.cfg.away {
+            return self.not_enabled();
+        }
+        self.request(Req::Away, json!({"t": "away"}))
+    }
+    /// Back in the foreground on a socket that never dropped: the others get
+    /// `MemberBack`. A no-op when not away. `Failed` only for `not_in_room`
+    /// (the seat already went; see `RoomClosed { reason: "timeout" }`) or
+    /// `offline` (harmless: the reconnect is back on its own). Needs
+    /// [`Config::away`], like `away`.
+    pub fn back(&mut self) -> u32 {
+        if !self.cfg.away {
+            return self.not_enabled();
+        }
+        self.away = None;
+        self.request(Req::Other, json!({"t": "back"}))
+    }
+    /// A request this engine wasn't configured for: a request id that fails at once, nothing sent.
+    fn not_enabled(&mut self) -> u32 {
+        let id = self.next_req;
+        self.next_req += 1;
+        self.emit(Event::Failed {
+            req: id,
+            code: "not_enabled".into(),
+            message: "the away grace is off: start the engine with Config { away: true, .. }".into(),
+        });
+        id
     }
     pub fn report(&mut self, metrics: Value) {
         if self.online() {
@@ -497,7 +591,14 @@ impl Core {
         // `fresh`: this engine has never been welcomed, so if its session is
         // an old one (a reloaded page), its links start over. `caps`: it can
         // restart its own link to a member that comes back fresh.
-        let mut hello = json!({"t": "hello", "v": 1, "key": self.cfg.key, "client": self.cfg.client, "caps": ["reset"], "fresh": !self.ever_up});
+        // `away`: hold its seat for the room's away grace and tell it about
+        // others with member_away / member_back (only with `Config::away`).
+        let caps: &[&str] = if self.cfg.away {
+            &["reset", AWAY_CAP]
+        } else {
+            &["reset"]
+        };
+        let mut hello = json!({"t": "hello", "v": 1, "key": self.cfg.key, "client": self.cfg.client, "caps": caps, "fresh": !self.ever_up});
         if let Some(t) = &self.cfg.player_token {
             hello["player_token"] = json!(t);
         }
@@ -571,32 +672,8 @@ impl Core {
                     reason: m["reason"].as_str().unwrap_or("left").into(),
                 });
             }
-            "member_suspended" | "member_resumed" => {
-                let mid = m["mid"].as_u64().unwrap_or(0) as u16;
-                if m["reset"] == true && self.peers.contains_key(&mid) {
-                    // It came back as a new engine: its link starts from zero, so ours does too.
-                    self.drop_peer(mid);
-                    self.add_peer(mid, now);
-                }
-                let suspended = m["t"] == "member_suspended";
-                if let Some(r) = self.room.as_mut() {
-                    if let Some(x) = r.members.iter_mut().find(|x| x.mid == mid) {
-                        x.status = if suspended { "suspended" } else { "active" }.into();
-                    }
-                }
-                let open = !suspended && self.online_now();
-                if let Some(p) = self.peers.get_mut(&mid) {
-                    // Its relay socket is down (or back); WebRTC paths judge themselves.
-                    p.link.set_open(PathId::Ws, open, now);
-                }
-                if !suspended {
-                    self.kick_unopened(mid, now);
-                }
-                self.emit(if suspended {
-                    Event::MemberSuspended { mid }
-                } else {
-                    Event::MemberResumed { mid }
-                });
+            "member_suspended" | "member_resumed" | "member_away" | "member_back" => {
+                self.presence(&m, now)
             }
             "room_updated" => {
                 if let Ok(mut room) = serde_json::from_value::<Room>(m["room"].clone()) {
@@ -628,6 +705,60 @@ impl Core {
 
     fn online_now(&self) -> bool {
         matches!(self.sock, Sock::Up)
+    }
+
+    /// A member is away or back: `member_away` / `member_back` (we opted in)
+    /// or `member_suspended` / `member_resumed` (an old edge, or `Config::away` off).
+    fn presence(&mut self, m: &Value, now: f64) {
+        let t = m["t"].as_str().unwrap_or("");
+        let mid = m["mid"].as_u64().unwrap_or(0) as u16;
+        let gone = matches!(t, "member_suspended" | "member_away");
+        if !gone && m["reset"] == true && self.peers.contains_key(&mid) {
+            // It came back as a new engine: its link starts from zero, so ours does too.
+            self.drop_peer(mid);
+            self.add_peer(mid, now);
+        }
+        let away = (t == "member_away").then(|| Away {
+            reason: if m["reason"] == "hint" { "hint" } else { "dropped" }.into(),
+            until: m["until"].as_f64().map_or(0, |x| x.max(0.0) as u64),
+        });
+        let default_grace = self
+            .room
+            .as_ref()
+            .and_then(|r| r.away_grace_ms)
+            .unwrap_or(partii_protocol::room::DEFAULT_AWAY_GRACE_MS);
+        if let Some(r) = self.room.as_mut() {
+            if let Some(x) = r.members.iter_mut().find(|x| x.mid == mid) {
+                x.status = if gone { "suspended" } else { "active" }.into();
+                if !gone {
+                    x.away = None;
+                } else if away.is_some() {
+                    x.away = away.clone();
+                }
+            }
+        }
+        // Its relay socket is down (or back): the edge drops packets to an away
+        // member, so the ws path closes and reliable sends wait for its return;
+        // WebRTC paths judge themselves (and restart when it's back).
+        let open = !gone && self.online_now();
+        if let Some(p) = self.peers.get_mut(&mid) {
+            p.link.set_open(PathId::Ws, open, now);
+        }
+        if !gone {
+            self.kick_unopened(mid, now);
+        }
+        let ev = match (t, away) {
+            ("member_away", Some(a)) => Event::MemberAway {
+                mid,
+                reason: a.reason,
+                until: a.until,
+                grace_ms: m["grace_ms"].as_u64().unwrap_or(default_grace),
+            },
+            ("member_back", _) => Event::MemberBack { mid },
+            ("member_suspended", _) => Event::MemberSuspended { mid },
+            _ => Event::MemberResumed { mid },
+        };
+        self.emit(ev);
     }
 
     pub fn on_binary(&mut self, b: &[u8], now: f64) {
@@ -726,6 +857,9 @@ impl Core {
         self.sock = Sock::Up;
         self.ever_up = true;
         self.attempt = 0;
+        // A welcome ends any away hold: a resume is back in the seat, and
+        // anything else means the seat is gone.
+        self.away = None;
         self.ice = serde_json::from_value(m["ice_servers"].clone()).unwrap_or_default();
         self.relay = m["relay"].as_str().unwrap_or("ws").into();
         let resumed = m["resumed"].as_bool().unwrap_or(false);
@@ -783,6 +917,21 @@ impl Core {
             return;
         };
         let kind = self.reqs.remove(&id).unwrap_or(Req::Other);
+        if kind == Req::Away && m["t"] == "ok" {
+            let a = Away {
+                reason: m["reason"].as_str().unwrap_or("hint").into(),
+                until: m["until"].as_f64().map_or(0, |x| x.max(0.0) as u64),
+            };
+            let grace_ms = m["grace_ms"].as_u64().unwrap_or(0);
+            self.away = Some(a.clone());
+            self.emit(Event::AwayHeld {
+                req: id,
+                reason: a.reason,
+                until: a.until,
+                grace_ms,
+            });
+            return;
+        }
         if m["t"] == "err" {
             if let Some(ms) = m["retry_after_ms"].as_u64() {
                 self.emit(Event::RateLimited {
@@ -834,6 +983,7 @@ impl Core {
 
     fn left_room(&mut self) {
         self.room = None;
+        self.away = None;
         let mids: Vec<u16> = self.peers.keys().copied().collect();
         for mid in mids {
             self.drop_peer(mid);

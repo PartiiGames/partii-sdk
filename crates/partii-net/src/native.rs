@@ -54,6 +54,8 @@ enum Cmd {
     },
     Report(Value),
     Stats(async_channel::Sender<Value>),
+    Away(async_channel::Sender<u32>),
+    Back(async_channel::Sender<u32>),
     Shutdown,
 }
 
@@ -164,7 +166,8 @@ impl Engine {
             serde_json::json!({"max_members": max_members}),
         )
     }
-    /// `create` with room settings from the start, e.g. `{"max_members": 32, "kinds": {"game": {"joinable": false}}}`.
+    /// `create` with room settings from the start, e.g. `{"max_members": 32, "kinds": {"game": {"joinable": false}}, "away_grace_ms": 60000}`
+    /// (`away_grace_ms`: how long an away member keeps its seat, 5000–300000, default 30000).
     pub fn create_with(
         &self,
         game: &str,
@@ -220,6 +223,7 @@ impl Engine {
     pub fn leave(&self) {
         let _ = self.cmd.try_send(Cmd::Leave);
     }
+    /// Host only: change the room, e.g. `{"joinable": false}` or `{"away_grace_ms": 60000}`.
     pub fn update(&self, patch: Value) {
         let _ = self.cmd.try_send(Cmd::Update(patch));
     }
@@ -233,6 +237,22 @@ impl Engine {
             reliable,
             bytes,
         });
+    }
+    /// The app is going to the background: hold this engine's seat for the
+    /// room's `away_grace_ms` (default 30 s). The edge answers with
+    /// `Event::AwayHeld` (or `Failed`; `not_enabled` without `Config::away`).
+    /// See `core::Core::away`.
+    pub fn away(&self) -> u32 {
+        let (tx, rx) = async_channel::bounded(1);
+        let _ = self.cmd.try_send(Cmd::Away(tx));
+        rx.recv_blocking().unwrap_or(0)
+    }
+    /// Back in the foreground on a socket that never dropped (a reconnect is
+    /// back on its own). See `core::Core::back`.
+    pub fn back(&self) -> u32 {
+        let (tx, rx) = async_channel::bounded(1);
+        let _ = self.cmd.try_send(Cmd::Back(tx));
+        rx.recv_blocking().unwrap_or(0)
     }
     pub fn report(&self, metrics: Value) {
         let _ = self.cmd.try_send(Cmd::Report(metrics));
@@ -299,6 +319,8 @@ async fn actor(
                 Ok(Cmd::Update(p)) => { core.update(p); }
                 Ok(Cmd::Kick(m)) => { core.kick(m); }
                 Ok(Cmd::MemberUpdate { name, meta, reply }) => { let _ = reply.try_send(core.member_update(name.as_deref(), meta)); }
+                Ok(Cmd::Away(reply)) => { let _ = reply.try_send(core.away()); }
+                Ok(Cmd::Back(reply)) => { let _ = reply.try_send(core.back()); }
                 Ok(Cmd::Send { to, reliable, bytes }) => {
                     // Take every send already waiting, then flush once:
                     // bundled frames cost the relay one request, not one each.
@@ -479,6 +501,12 @@ fn apply_other(core: &mut Core, c: Cmd) -> bool {
         }
         Cmd::MemberUpdate { name, meta, reply } => {
             let _ = reply.try_send(core.member_update(name.as_deref(), meta));
+        }
+        Cmd::Away(reply) => {
+            let _ = reply.try_send(core.away());
+        }
+        Cmd::Back(reply) => {
+            let _ = reply.try_send(core.back());
         }
         Cmd::Report(m) => core.report(m),
         Cmd::Stats(reply) => {

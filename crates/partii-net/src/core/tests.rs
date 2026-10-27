@@ -8,6 +8,7 @@ fn core(no_webrtc: bool) -> Core {
         client: "t".into(),
         player_token: None,
         no_webrtc,
+        away: false,
     })
 }
 
@@ -711,7 +712,7 @@ fn hello_says_fresh_only_before_the_first_welcome() {
     c.on_socket_open(0.0);
     let h = texts(&c.drain());
     assert_eq!(h[0]["fresh"], true);
-    assert_eq!(h[0]["caps"], json!(["reset"]));
+    assert_eq!(h[0]["caps"], json!(["reset"]), "the away grace is opt-in");
     c.on_text(
         r#"{"t":"welcome","resumed":false,"relay":"ws","ice_servers":[]}"#,
         1.0,
@@ -750,4 +751,216 @@ fn a_member_back_from_a_new_engine_gets_a_fresh_link() {
     assert!(events(&c.drain())
         .iter()
         .any(|e| matches!(e, Event::MemberResumed { mid: 2 })));
+}
+
+// ── Away grace (PROTOCOL.md "Away") ──
+
+/// A room as an opted-in reader sees it, joined as `you`.
+fn in_room(you: u16, mids: &[u16]) -> Core {
+    let mut c = core(true);
+    c.cfg.away = true;
+    online(&mut c, "ws");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    let mut r = room(you, mids);
+    r["away_grace_ms"] = json!(30_000);
+    c.on_text(&json!({"t": "ok", "id": id, "room": r}).to_string(), 0.0);
+    c.drain();
+    c
+}
+
+#[test]
+fn hello_opts_in_to_away_only_when_asked() {
+    let mut c = core(true);
+    c.cfg.away = true;
+    c.tick(0.0);
+    c.on_socket_open(0.0);
+    assert_eq!(texts(&c.drain())[0]["caps"], json!(["reset", "away"]));
+    // The web engine's JSON config may leave every optional field out; away is off then.
+    let cfg: Config = serde_json::from_str(r#"{"edge":"https://e","key":"pk"}"#).unwrap();
+    assert!(!cfg.away && !cfg.no_webrtc && cfg.conn.is_empty());
+    let on: Config = serde_json::from_str(r#"{"edge":"https://e","key":"pk","away":true}"#).unwrap();
+    assert!(on.away);
+}
+
+#[test]
+fn away_and_back_without_opting_in_fail_and_send_nothing() {
+    let mut c = core(true);
+    online(&mut c, "ws");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(&json!({"t": "ok", "id": id, "room": room(2, &[1, 2])}).to_string(), 0.0);
+    c.drain();
+    for back in [false, true] {
+        let req = if back { c.back() } else { c.away() };
+        let acts = c.drain();
+        assert!(texts(&acts).is_empty(), "nothing goes to the edge");
+        assert!(matches!(&events(&acts)[..], [Event::Failed { req: r, code, .. }] if *r == req && code == "not_enabled"));
+    }
+    assert!(c.away_hold().is_none() && c.room().is_some());
+}
+
+#[test]
+fn the_rooms_away_grace_and_away_members_parse() {
+    let c = in_room(1, &[1, 2]);
+    assert_eq!(c.room().unwrap().away_grace_ms, Some(30_000));
+}
+
+#[test]
+fn member_away_by_hint_then_back() {
+    let mut c = in_room(1, &[1, 2]);
+    c.on_text(
+        r#"{"t":"member_away","mid":2,"reason":"hint","until":1761500030000,"grace_ms":30000}"#,
+        1.0,
+    );
+    let evs = events(&c.drain());
+    assert_eq!(
+        evs,
+        vec![Event::MemberAway { mid: 2, reason: "hint".into(), until: 1_761_500_030_000, grace_ms: 30_000 }]
+    );
+    let m = &c.room().unwrap().members[1];
+    assert_eq!(m.status, "suspended");
+    assert_eq!(m.away, Some(Away { reason: "hint".into(), until: 1_761_500_030_000 }));
+    assert!(!c.link(2).unwrap().path(PathId::Ws).open, "the edge drops packets to it");
+    // Sending to an away member is no error: reliable data waits for its return.
+    c.send(2, true, b"hi", 2.0);
+    let acts = c.drain();
+    assert!(!events(&acts).iter().any(|e| matches!(e, Event::Error { .. } | Event::Failed { .. })));
+    assert!(c.link(2).unwrap().pending_reliable() > 0);
+    c.on_text(r#"{"t":"member_back","mid":2}"#, 3.0);
+    assert_eq!(events(&c.drain()), vec![Event::MemberBack { mid: 2 }]);
+    let m = &c.room().unwrap().members[1];
+    assert_eq!((m.status.as_str(), m.away.as_ref()), ("active", None));
+    assert!(c.link(2).unwrap().path(PathId::Ws).open, "its link is back");
+}
+
+#[test]
+fn member_away_dropped_then_back_with_a_reset_restarts_the_link() {
+    let mut c = in_room(1, &[1, 2]);
+    for i in 0..5u8 {
+        c.send(2, true, &[i], 1.0);
+    }
+    c.drain();
+    c.on_text(r#"{"t":"member_away","mid":2,"reason":"dropped","until":5,"grace_ms":30000}"#, 2.0);
+    assert!(matches!(
+        &events(&c.drain())[..],
+        [Event::MemberAway { mid: 2, reason, .. }] if reason == "dropped"
+    ));
+    assert!(c.link(2).unwrap().pending_reliable() > 0);
+    c.on_text(r#"{"t":"member_back","mid":2,"reset":true}"#, 3.0);
+    assert_eq!(c.link(2).unwrap().pending_reliable(), 0, "a fresh link");
+    assert!(c.link(2).unwrap().path(PathId::Ws).open);
+    assert!(events(&c.drain()).contains(&Event::MemberBack { mid: 2 }));
+}
+
+#[test]
+fn member_away_then_left_on_timeout() {
+    let mut c = in_room(1, &[1, 2]);
+    c.on_text(r#"{"t":"member_away","mid":2,"reason":"hint","until":5,"grace_ms":5000}"#, 1.0);
+    c.on_text(r#"{"t":"member_left","mid":2,"reason":"timeout"}"#, 2.0);
+    let evs = events(&c.drain());
+    assert_eq!(evs[1], Event::MemberLeft { mid: 2, reason: "timeout".into() });
+    assert!(c.link(2).is_none());
+    assert_eq!(c.room().unwrap().members.len(), 1);
+}
+
+#[test]
+fn old_presence_frames_still_give_the_old_events() {
+    // An edge from before the away grace (or a member we hear about the old way).
+    let mut c = in_room(1, &[1, 2]);
+    c.on_text(r#"{"t":"member_suspended","mid":2}"#, 1.0);
+    c.on_text(r#"{"t":"member_resumed","mid":2}"#, 2.0);
+    assert_eq!(
+        events(&c.drain()),
+        vec![Event::MemberSuspended { mid: 2 }, Event::MemberResumed { mid: 2 }]
+    );
+    // A member_away without grace_ms takes the room's grace.
+    c.on_text(r#"{"t":"member_away","mid":2,"until":9}"#, 3.0);
+    assert!(matches!(
+        &events(&c.drain())[..],
+        [Event::MemberAway { reason, grace_ms: 30_000, .. }] if reason == "dropped"
+    ));
+}
+
+#[test]
+fn away_and_back_requests_and_their_replies() {
+    let mut c = in_room(2, &[1, 2]);
+    let id = c.away();
+    assert_eq!(texts(&c.drain()), vec![json!({"t": "away", "id": id})]);
+    c.on_text(
+        &json!({"t": "ok", "id": id, "reason": "hint", "until": 1_761_500_030_000u64, "grace_ms": 30_000}).to_string(),
+        1.0,
+    );
+    assert_eq!(
+        events(&c.drain()),
+        vec![Event::AwayHeld { req: id, reason: "hint".into(), until: 1_761_500_030_000, grace_ms: 30_000 }]
+    );
+    assert_eq!(c.away_hold().map(|a| a.until), Some(1_761_500_030_000));
+    let b = c.back();
+    assert_eq!(texts(&c.drain()), vec![json!({"t": "back", "id": b})]);
+    assert!(c.away_hold().is_none());
+    c.on_text(&json!({"t": "ok", "id": b}).to_string(), 2.0);
+    assert!(events(&c.drain()).is_empty(), "back's ok says nothing more");
+    assert!(c.room().is_some());
+
+    // Not in a room: the edge refuses.
+    let mut d = core(true);
+    d.cfg.away = true;
+    online(&mut d, "ws");
+    let id = d.away();
+    d.drain();
+    d.on_text(&json!({"t": "err", "id": id, "code": "not_in_room", "message": "not in a room"}).to_string(), 1.0);
+    assert!(matches!(&events(&d.drain())[..], [Event::Failed { req, code, .. }] if *req == id && code == "not_in_room"));
+    assert!(d.away_hold().is_none());
+}
+
+#[test]
+fn away_offline_fails_harmlessly() {
+    let mut c = core(true);
+    c.cfg.away = true;
+    let id = c.away();
+    assert!(matches!(&events(&c.drain())[..], [Event::Failed { req, code, .. }] if *req == id && code == "offline"));
+}
+
+#[test]
+fn away_by_hint_past_the_grace_closes_the_room_with_timeout() {
+    let mut c = in_room(2, &[1, 2]);
+    let id = c.away();
+    c.on_text(&json!({"t": "ok", "id": id, "reason": "hint", "until": 5, "grace_ms": 5000}).to_string(), 1.0);
+    c.drain();
+    // The socket stayed up past `until`: the seat went.
+    c.on_text(r#"{"t":"room_closed","reason":"timeout"}"#, 6000.0);
+    assert_eq!(events(&c.drain()), vec![Event::RoomClosed { reason: "timeout".into() }]);
+    assert!(c.room().is_none() && c.link(1).is_none() && c.away_hold().is_none());
+}
+
+#[test]
+fn away_then_a_dropped_socket_resumes_into_the_same_seat() {
+    let mut c = in_room(2, &[1, 2]);
+    let id = c.away();
+    c.on_text(&json!({"t": "ok", "id": id, "reason": "hint", "until": 99, "grace_ms": 30000}).to_string(), 1.0);
+    c.on_socket_closed(2.0);
+    c.tick(10.0);
+    c.on_socket_open(10.0);
+    c.drain();
+    c.on_text(
+        &json!({"t": "welcome", "resumed": true, "relay": "ws", "ice_servers": [], "room": room(2, &[1, 2])}).to_string(),
+        11.0,
+    );
+    let evs = events(&c.drain());
+    assert!(!evs.iter().any(|e| matches!(e, Event::RoomClosed { .. })));
+    assert!(c.away_hold().is_none(), "the resume is back");
+    assert_eq!(c.me(), Some(2));
+    assert!(c.link(1).unwrap().path(PathId::Ws).open);
+}
+
+#[test]
+fn events_serialize_with_snake_case_names() {
+    let v = serde_json::to_value(Event::MemberAway { mid: 2, reason: "hint".into(), until: 1, grace_ms: 2 }).unwrap();
+    assert_eq!(v, json!({"ev": "member_away", "mid": 2, "reason": "hint", "until": 1, "grace_ms": 2}));
+    assert_eq!(serde_json::to_value(Event::MemberBack { mid: 2 }).unwrap(), json!({"ev": "member_back", "mid": 2}));
+    assert_eq!(
+        serde_json::to_value(Event::AwayHeld { req: 3, reason: "hint".into(), until: 1, grace_ms: 2 }).unwrap()["ev"],
+        "away_held"
+    );
 }
