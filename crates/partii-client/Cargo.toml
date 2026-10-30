@@ -16,3 +16,5 @@ categories = ["game-development", "api-bindings"]
 serde.workspace = true
 serde_json.workspace = true
 ureq = { version = "3", features = ["json"] }
+# The sha256 a report's file is uploaded with (reports.rs).
+sha2 = "0.10"

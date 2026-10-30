@@ -6,6 +6,8 @@
 
 mod generated;
 pub use generated::OPS;
+/// Reports to the game's developer from inside the game, files and all: [`reports::submit`].
+pub mod reports;
 
 use serde_json::Value;
 use std::collections::BTreeMap;
