@@ -41,6 +41,8 @@
 //! ```
 
 mod analytics;
+pub mod buy;
+pub use buy::{BuyOutcome, BuyStatus};
 pub use analytics::{install_panic_hook, this_platform, MAX_QUEUED};
 
 use std::collections::HashMap;
@@ -128,6 +130,12 @@ struct State {
     watching: Option<std::time::Instant>,
     /// A purchase landed while watching, for `take_purchased`.
     purchased: bool,
+    /// The buy sheet to show when the browser couldn't be opened (`take_buy_url`).
+    buy_url: Option<String>,
+    /// Buys that ended, for `take_buy`.
+    buys: Vec<BuyOutcome>,
+    /// item id → count the player holds (playersItems); None until fetched.
+    items: Option<HashMap<String, i64>>,
 }
 
 enum Job {
@@ -147,6 +155,10 @@ enum Job {
     Achievements,
     /// Listen for a purchase of this game until then (the buy screen is open).
     WatchPurchase(std::time::Instant),
+    /// Wait for a buy on Partii's sheet (already open in the browser) to end.
+    Buy { item: String, purchase_id: String },
+    /// Fetch the items the player holds.
+    Items,
 }
 
 /// An achievement unlock or progress waiting to reach partii.
@@ -407,6 +419,20 @@ impl Account {
                             send_achievements(&c, &cfg.game, &shared, &ach_path);
                         }
                         Job::Achievements => send_achievements(&c, &cfg.game, &shared, &ach_path),
+                        Job::Items => fetch_items(&c, &cfg.game, &shared),
+                        Job::Buy { item, purchase_id } => {
+                            // Its own thread: the player may take minutes on the sheet.
+                            let (c, game, st) = (c.clone(), cfg.game.clone(), shared.clone());
+                            std::thread::spawn(move || {
+                                let until = std::time::Instant::now() + buy::BUY_WAIT;
+                                let status = buy::poll_buy(&c, &purchase_id, until, &std::thread::sleep);
+                                if status == BuyStatus::TimedOut {
+                                    buy::cancel_buy(&c, &purchase_id, &game, &item);
+                                }
+                                fetch_items(&c, &game, &st);
+                                lock(&st).buys.push(BuyOutcome { purchase_id, item, status });
+                            });
+                        }
                         Job::WatchPurchase(until) => {
                             // Its own thread: the wait holds a request open for up to 25 s.
                             let first = {
@@ -652,6 +678,41 @@ impl Account {
     /// True once after a purchase that `watch_purchase` heard about.
     pub fn take_purchased(&self) -> bool {
         std::mem::take(&mut lock(&self.st).purchased)
+    }
+    /// Buy one of the game's items (docs/BUYING.md): opens Partii's buy sheet in the browser
+    /// (partii.games/buy/<game>/<item>), where the player pays with Pops or a card, and waits for
+    /// the edge to say how it ended: `take_buy` returns it once. Returns the purchase id.
+    /// When no browser could be opened, `take_buy_url` has the address to show.
+    pub fn buy(&self, item: &str) -> String {
+        self.buy_with(item, 1)
+    }
+    /// `buy` for a consumable, `quantity` at once (1-100).
+    pub fn buy_with(&self, item: &str, quantity: u32) -> String {
+        let pid = buy::new_purchase_id();
+        let url = buy::buy_url(&buy::store_for(&self.edge), &self.game, item, &pid, quantity.clamp(1, 100));
+        if !buy::open_in_browser(&url) {
+            lock(&self.st).buy_url = Some(url);
+        }
+        let _ = self.jobs.send(Job::Buy { item: item.to_string(), purchase_id: pid.clone() });
+        pid
+    }
+    /// The buy sheet's address, once, when `buy` couldn't open a browser (show it as a link or QR).
+    pub fn take_buy_url(&self) -> Option<String> {
+        lock(&self.st).buy_url.take()
+    }
+    /// A buy that ended (bought, cancelled, failed or timed out), once each.
+    pub fn take_buy(&self) -> Option<BuyOutcome> {
+        let mut s = lock(&self.st);
+        if s.buys.is_empty() { None } else { Some(s.buys.remove(0)) }
+    }
+    /// How many of an item the player holds (an unlock: 1 when owned); None until fetched
+    /// (`refresh_items`; a buy refreshes it when it ends).
+    pub fn item_count(&self, item: &str) -> Option<i64> {
+        lock(&self.st).items.as_ref().map(|m| m.get(item).copied().unwrap_or(0))
+    }
+    /// Fetch the items the player holds (call once at start for `item_count`).
+    pub fn refresh_items(&self) {
+        let _ = self.jobs.send(Job::Items);
     }
     /// Start buying the game; the URL to open arrives via `take_checkout`.
     pub fn start_checkout(&self) {
@@ -1004,6 +1065,21 @@ pub fn merge_objects(_slot: &str, mine: &str, theirs: &str) -> Option<String> {
         t.insert(k, v);
     }
     serde_json::to_string(&Value::Object(t)).ok()
+}
+
+/// The items the player holds in this game (playersItems), into `items`.
+fn fetch_items(c: &Client, game: &str, st: &Arc<Mutex<State>>) {
+    if let Ok(v) = c.json("playersItems", &[("game", game)], None) {
+        let mut m = HashMap::new();
+        for i in v["items"].as_array().into_iter().flatten() {
+            if i["game"].as_str().is_none_or(|g| g == game) {
+                if let Some(id) = i["item"].as_str() {
+                    m.insert(id.to_string(), i["count"].as_i64().unwrap_or(0));
+                }
+            }
+        }
+        lock(st).items = Some(m);
+    }
 }
 
 #[cfg(test)]
