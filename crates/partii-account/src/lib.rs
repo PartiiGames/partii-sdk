@@ -42,8 +42,8 @@
 
 mod analytics;
 pub mod buy;
-pub use buy::{BuyOutcome, BuyStatus};
 pub use analytics::{install_panic_hook, this_platform, MAX_QUEUED};
+pub use buy::{BuyOutcome, BuyStatus};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -155,8 +155,13 @@ enum Job {
     Achievements,
     /// Listen for a purchase of this game until then (the buy screen is open).
     WatchPurchase(std::time::Instant),
-    /// Wait for a buy on Partii's sheet (already open in the browser) to end.
-    Buy { item: String, purchase_id: String },
+    /// Open Partii's buy sheet (through a buy link when the edge has them) and wait for the buy to end.
+    Buy {
+        item: String,
+        purchase_id: String,
+        quantity: u32,
+        jobs: Sender<Job>,
+    },
     /// Fetch the items the player holds.
     Items,
 }
@@ -420,17 +425,74 @@ impl Account {
                         }
                         Job::Achievements => send_achievements(&c, &cfg.game, &shared, &ach_path),
                         Job::Items => fetch_items(&c, &cfg.game, &shared),
-                        Job::Buy { item, purchase_id } => {
+                        Job::Buy {
+                            item,
+                            purchase_id,
+                            quantity,
+                            jobs,
+                        } => {
                             // Its own thread: the player may take minutes on the sheet.
                             let (c, game, st) = (c.clone(), cfg.game.clone(), shared.clone());
+                            let device = device_id(&cfg.data_dir);
                             std::thread::spawn(move || {
+                                // A buy link buys as this player, whoever the browser is signed in as; an
+                                // older edge has none, and the plain address buys as the browser's account.
+                                let url =
+                                    buy::request_link(&c, &game, &item, &purchase_id, quantity)
+                                        .unwrap_or_else(|| {
+                                            buy::buy_url(
+                                                &buy::store_for(&c.base),
+                                                &game,
+                                                &item,
+                                                &purchase_id,
+                                                quantity,
+                                            )
+                                        });
+                                if !buy::open_in_browser(&url) {
+                                    lock(&st).buy_url = Some(url);
+                                }
                                 let until = std::time::Instant::now() + buy::BUY_WAIT;
-                                let status = buy::poll_buy(&c, &purchase_id, until, &std::thread::sleep);
+                                let (status, moved) = buy::poll_buy_following(
+                                    &c,
+                                    &purchase_id,
+                                    until,
+                                    &std::thread::sleep,
+                                );
                                 if status == BuyStatus::TimedOut {
                                     buy::cancel_buy(&c, &purchase_id, &game, &item);
                                 }
+                                let mut c = c;
+                                // The guest signed in on the sheet to an account it joined: this device's guest
+                                // call lands on that account now; carry on as it (saves, entitlements, items).
+                                if let Some(to) = moved {
+                                    let key_only = Client {
+                                        player_token: None,
+                                        ..c.clone()
+                                    };
+                                    if let Ok(v) = key_only.json(
+                                        "playersGuest",
+                                        &[],
+                                        Some(json!({ "device_id": device })),
+                                    ) {
+                                        if v["player"]["id"].as_str() == Some(to.as_str()) {
+                                            if let Some(t) = v["player_token"].as_str() {
+                                                signed_in(&st, &v);
+                                                c.player_token = Some(t.to_string());
+                                                let _ = jobs.send(Job::SignedIn(t.to_string()));
+                                            }
+                                        }
+                                    }
+                                }
                                 fetch_items(&c, &game, &st);
-                                lock(&st).buys.push(BuyOutcome { purchase_id, item, status });
+                                // The game itself: its library copy, owns("full").
+                                if item == buy::GAME {
+                                    let _ = jobs.send(Job::Refresh);
+                                }
+                                lock(&st).buys.push(BuyOutcome {
+                                    purchase_id,
+                                    item,
+                                    status,
+                                });
                             });
                         }
                         Job::WatchPurchase(until) => {
@@ -682,19 +744,28 @@ impl Account {
     /// Buy one of the game's items (docs/BUYING.md): opens Partii's buy sheet in the browser
     /// (partii.games/buy/<game>/<item>), where the player pays with Pops or a card, and waits for
     /// the edge to say how it ended: `take_buy` returns it once. Returns the purchase id.
-    /// When no browser could be opened, `take_buy_url` has the address to show.
+    /// The sheet buys as this game's player whatever the browser is signed in as (a buy link,
+    /// `playersBuyLink`; an older edge gets the plain address). When no browser could be opened,
+    /// `take_buy_url` has the address to show (a moment after the call: the link is asked for first).
     pub fn buy(&self, item: &str) -> String {
         self.buy_with(item, 1)
     }
     /// `buy` for a consumable, `quantity` at once (1-100).
     pub fn buy_with(&self, item: &str, quantity: u32) -> String {
         let pid = buy::new_purchase_id();
-        let url = buy::buy_url(&buy::store_for(&self.edge), &self.game, item, &pid, quantity.clamp(1, 100));
-        if !buy::open_in_browser(&url) {
-            lock(&self.st).buy_url = Some(url);
-        }
-        let _ = self.jobs.send(Job::Buy { item: item.to_string(), purchase_id: pid.clone() });
+        let _ = self.jobs.send(Job::Buy {
+            item: item.to_string(),
+            purchase_id: pid.clone(),
+            quantity: quantity.clamp(1, 100),
+            jobs: self.jobs.clone(),
+        });
         pid
+    }
+    /// Buy the game itself (BUY FULL GAME) on Partii's buy sheet: the same library copy the website
+    /// sells (Pops 10% off, or a card). `take_buy` reports it (item `"game"`), and `owns("full")` turns
+    /// true by itself once it's bought (the entitlements are fetched again).
+    pub fn buy_game(&self) -> String {
+        self.buy(buy::GAME)
     }
     /// The buy sheet's address, once, when `buy` couldn't open a browser (show it as a link or QR).
     pub fn take_buy_url(&self) -> Option<String> {
@@ -703,12 +774,19 @@ impl Account {
     /// A buy that ended (bought, cancelled, failed or timed out), once each.
     pub fn take_buy(&self) -> Option<BuyOutcome> {
         let mut s = lock(&self.st);
-        if s.buys.is_empty() { None } else { Some(s.buys.remove(0)) }
+        if s.buys.is_empty() {
+            None
+        } else {
+            Some(s.buys.remove(0))
+        }
     }
     /// How many of an item the player holds (an unlock: 1 when owned); None until fetched
     /// (`refresh_items`; a buy refreshes it when it ends).
     pub fn item_count(&self, item: &str) -> Option<i64> {
-        lock(&self.st).items.as_ref().map(|m| m.get(item).copied().unwrap_or(0))
+        lock(&self.st)
+            .items
+            .as_ref()
+            .map(|m| m.get(item).copied().unwrap_or(0))
     }
     /// Fetch the items the player holds (call once at start for `item_count`).
     pub fn refresh_items(&self) {
@@ -1263,6 +1341,174 @@ mod tests {
         }
         assert_eq!(a.owns("full"), Some(true));
         assert!(!a.take_purchased());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// partii for a buy through a buy link: the device's guest (p_guest) asks for the link; on the sheet
+    /// it signs in to an account it already had (p_ada) and joins it, so the status (asked with the
+    /// guest's token) answers bought with moved_to, and the device's guest call lands on p_ada from then.
+    /// old: an edge without buy links (404 for playersBuyLink). Keeps every path asked, with its token.
+    fn fake_buy_partii(old: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", l.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            let mut polls = 0;
+            for s in l.incoming().flatten() {
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut line = String::new();
+                let _ = r.read_line(&mut line);
+                let (mut len, mut auth) = (0, String::new());
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                        break;
+                    }
+                    let lower = h.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                    if lower.starts_with("authorization:") {
+                        auth = h[14..].trim().to_string();
+                    }
+                }
+                let mut body = vec![0; len];
+                let _ = std::io::Read::read_exact(&mut r, &mut body);
+                let path = line.split(' ').nth(1).unwrap_or("").to_string();
+                log.lock().unwrap().push(format!("{path} {auth}"));
+                let merged = polls >= 2;
+                let (status, reply) = if path.starts_with("/v1/players/guest") {
+                    let (id, t) = if merged {
+                        ("p_ada", "pt_ada")
+                    } else {
+                        ("p_guest", "pt_guest")
+                    };
+                    (
+                        200,
+                        json!({ "ok": true, "player": { "id": id, "providers": if merged { json!(["device", "email"]) } else { json!(["device"]) } }, "player_token": t }),
+                    )
+                } else if path.starts_with("/v1/players/me/buys/link") {
+                    if old {
+                        (
+                            404,
+                            json!({ "ok": false, "error": { "code": "not_found", "message": "no such route" } }),
+                        )
+                    } else {
+                        (
+                            200,
+                            json!({ "ok": true, "url": "https://partii.games/buy/buyme/game?purchase_id=pur_x&link=bl_test" }),
+                        )
+                    }
+                } else if path.starts_with("/v1/players/me/buys/") {
+                    polls += 1;
+                    if polls >= 2 {
+                        (
+                            200,
+                            json!({ "ok": true, "status": "bought", "item": "game", "count": 1, "moved_to": if old { Value::Null } else { json!({ "id": "p_ada" }) } }),
+                        )
+                    } else {
+                        (200, json!({ "ok": true, "status": "open" }))
+                    }
+                } else if path.starts_with("/v1/players/me/entitlements") {
+                    (
+                        200,
+                        json!({ "ok": true, "entitlements": if merged { json!([{ "game": "buyme", "sku": "full" }]) } else { json!([]) }, "signed": "" }),
+                    )
+                } else {
+                    (200, json!({ "ok": true, "items": [] }))
+                };
+                let b = reply.to_string();
+                let mut s = s;
+                let _ = write!(s, "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", b.len(), b);
+            }
+        });
+        (addr, seen)
+    }
+
+    fn buying(old: bool) -> (Account, Arc<Mutex<Vec<String>>>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("partii-account-link-{}-{}", now_ms(), old));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (edge, seen) = fake_buy_partii(old);
+        let a = Account::start(AccountConfig {
+            edge,
+            key: Some("pk_x".into()),
+            game: "buyme".into(),
+            data_dir: dir.clone(),
+            analytics: false,
+            ..AccountConfig::default()
+        });
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !a.ready() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        (a, seen, dir)
+    }
+
+    fn wait_buy(a: &Account) -> BuyOutcome {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if let Some(d) = a.take_buy() {
+                return d;
+            }
+            assert!(std::time::Instant::now() < until, "the buy never ended");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn buy_game_goes_through_a_buy_link_and_follows_the_merge() {
+        let (a, seen, dir) = buying(false);
+        assert_eq!(a.owns("full"), Some(false));
+        let pid = a.buy_game();
+        let done = wait_buy(&a);
+        assert_eq!(
+            (done.purchase_id.as_str(), done.item.as_str(), &done.status),
+            (pid.as_str(), "game", &BuyStatus::Bought { count: 1 })
+        );
+        // No browser in tests: the link (not the plain address) is what's shown.
+        assert_eq!(
+            a.take_buy_url().as_deref(),
+            Some("https://partii.games/buy/buyme/game?purchase_id=pur_x&link=bl_test")
+        );
+        // The guest asked for the link with its own token; after the merge the game is the account.
+        assert!(seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.starts_with("/v1/players/me/buys/link Bearer pt_guest")));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while a.owns("full") != Some(true) || a.player_id().as_deref() != Some("p_ada") {
+            assert!(
+                std::time::Instant::now() < until,
+                "the game never followed: {:?} {:?}",
+                a.owns("full"),
+                a.player_id()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(a.player_token().as_deref(), Some("pt_ada"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_older_edge_gets_the_plain_address() {
+        let (a, _seen, dir) = buying(true);
+        let pid = a.buy("gold-tank");
+        let done = wait_buy(&a);
+        assert_eq!(done.status, BuyStatus::Bought { count: 1 });
+        assert_eq!(
+            a.take_buy_url(),
+            Some(buy::buy_url(
+                &buy::store_for("http://127.0.0.1"),
+                "buyme",
+                "gold-tank",
+                &pid,
+                1
+            ))
+        );
+        assert_eq!(a.player_id().as_deref(), Some("p_guest"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
