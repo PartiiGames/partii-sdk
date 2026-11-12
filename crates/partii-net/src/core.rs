@@ -6,7 +6,7 @@
 use crate::link::{Link, LinkEvent, PathId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// How often the driver should call `tick` (ms).
 pub const TICK_MS: f64 = 10.0;
@@ -20,6 +20,58 @@ const PC_RETRY_MS: [f64; 5] = [1000.0, 2000.0, 4000.0, 8000.0, 10000.0];
 /// A WebRTC path that has not opened by now is rebuilt.
 const PC_OPEN_TIMEOUT_MS: f64 = 12_000.0;
 pub use partii_protocol::room::{BROADCAST, RELAY_BUNDLE, RELAY_FRAME};
+/// A member that joined a room it did not create holds its non-host WebRTC
+/// paths this long for the host's topology announcement (see [`Topology`]);
+/// an old host never sends one, and then the member's own choice stands.
+pub const TOPOLOGY_WAIT_MS: f64 = 2_000.0;
+
+/// Which members of a room link to each other. Set by the game in the
+/// `create_with` / `join_with` settings (`{"topology": "star"}`) or a host's
+/// `update`; anything else (or nothing) is [`Topology::Mesh`].
+///
+/// - `Mesh` (the default, unchanged): every member links to every other.
+/// - `Star`: members link only to the room's host (`room.host`); the host
+///   links to everyone. A room of `n` has `n - 1` links instead of
+///   `n (n - 1) / 2`, and each non-host keeps exactly one.
+///
+/// The room's creator decides. Its engine announces the topology to every
+/// member over signaling (`signal` data `{"pc": "net", "topology": ..}`,
+/// which older engines ignore); members follow it whatever they asked for.
+/// A `topology` field on the edge's room view, once the edge carries one,
+/// wins over both.
+///
+/// In a star, a non-host sending to another non-host has no link to send
+/// on: the send is dropped and an [`Event::Error`] says so (once per member
+/// per room). Send to the host and let it forward. `BROADCAST` from a
+/// non-host reaches the host only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Topology {
+    #[default]
+    Mesh,
+    Star,
+}
+
+impl Topology {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Topology::Mesh => "mesh",
+            Topology::Star => "star",
+        }
+    }
+    /// `"star"` is a star; anything else is a mesh.
+    pub fn parse(v: &Value) -> Topology {
+        if v.as_str() == Some("star") {
+            Topology::Star
+        } else {
+            Topology::Mesh
+        }
+    }
+    /// The settings object for `create_with` / `join_with`: `{"topology": "star"}`.
+    pub fn settings(self) -> Value {
+        json!({"topology": self.as_str()})
+    }
+}
 
 /// Fields left out of a JSON config (the web engine's) take their defaults.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -263,6 +315,21 @@ pub struct Core {
     last_ping: f64,
     /// This engine's own away hold (an `away` the edge took), until it's back.
     away: Option<Away>,
+    /// The topology the game asked for with its last create/join.
+    want: Topology,
+    /// The room's topology as this engine follows it.
+    topology: Topology,
+    /// Known for sure (we created the room, the room says, or the host
+    /// announced it); until then, links to non-hosts wait (`TOPOLOGY_WAIT_MS`).
+    settled: bool,
+    /// When this engine came into its room (for `TOPOLOGY_WAIT_MS`).
+    entered_at: f64,
+    /// A host announcement that beat our own Joined: (from, topology).
+    early_announce: Option<(u16, Topology)>,
+    /// Members a send to was refused in a star (each said once per room).
+    refused: BTreeSet<u16>,
+    /// The latest `now` the driver gave (for requests that carry none).
+    clock: f64,
 }
 
 impl Core {
@@ -283,7 +350,23 @@ impl Core {
             last_rx: 0.0,
             last_ping: 0.0,
             away: None,
+            want: Topology::Mesh,
+            topology: Topology::Mesh,
+            settled: false,
+            entered_at: 0.0,
+            early_announce: None,
+            refused: BTreeSet::new(),
+            clock: 0.0,
         }
+    }
+
+    /// The topology this engine follows in its room ([`Topology`]).
+    pub fn topology(&self) -> Topology {
+        self.topology
+    }
+    /// Does this engine keep a link to member `mid`?
+    pub fn linked(&self, mid: u16) -> bool {
+        self.peers.contains_key(&mid)
     }
 
     pub fn room(&self) -> Option<&Room> {
@@ -320,7 +403,7 @@ impl Core {
                 (mid.to_string(), json!({"current": p.link.current(), "retransmits": p.link.retransmits(), "paths": paths}))
             })
             .collect();
-        json!({"online": self.online(), "relay": self.relay, "peers": peers})
+        json!({"online": self.online(), "relay": self.relay, "topology": self.topology.as_str(), "peers": peers})
     }
 
     /// Everything the driver should do now.
@@ -420,6 +503,7 @@ impl Core {
         meta: Value,
         settings: Value,
     ) -> u32 {
+        self.want = Topology::parse(&settings["topology"]);
         let mut v = json!({"t": "create", "game": game, "kind": kind, "name": name, "meta": meta});
         if let Value::Object(o) = settings {
             for (k, x) in o {
@@ -443,6 +527,7 @@ impl Core {
         meta: Value,
         settings: Value,
     ) -> u32 {
+        self.want = Topology::parse(&settings["topology"]);
         let mut v = json!({"t": "join", "code": code, "kind": kind, "name": name, "meta": meta});
         if let Value::Object(o) = settings {
             for (k, x) in o {
@@ -460,7 +545,16 @@ impl Core {
     }
     /// Host only: change the room, e.g. `{"joinable": false}` or
     /// `{"away_grace_ms": 60000}` (holds already running keep their end).
+    /// The host may also switch the topology: `{"topology": "star"}` (a host
+    /// whose page reloaded as a fresh engine is back on a mesh until it does).
     pub fn update(&mut self, patch: Value) -> u32 {
+        if !patch["topology"].is_null() && self.is_host() {
+            self.want = Topology::parse(&patch["topology"]);
+            self.topology = self.want;
+            self.settled = true;
+            self.announce_all();
+            self.reconcile(self.clock);
+        }
         let mut v = patch;
         v["t"] = json!("update");
         self.request(Req::Other, v)
@@ -524,11 +618,7 @@ impl Core {
     /// Queue for one member (or `BROADCAST`) without flushing; `flush`
     /// sends everything queued, bundled per member.
     pub fn queue(&mut self, to: u16, reliable: bool, bytes: &[u8]) {
-        let targets: Vec<u16> = if to == BROADCAST {
-            self.peers.keys().copied().collect()
-        } else {
-            vec![to]
-        };
+        let targets = self.targets(to);
         for mid in targets {
             if let Some(p) = self.peers.get_mut(&mid) {
                 p.link.send(reliable, bytes);
@@ -545,11 +635,7 @@ impl Core {
 
     /// Send to one member (or `BROADCAST`) now.
     pub fn send(&mut self, to: u16, reliable: bool, bytes: &[u8], now: f64) {
-        let targets: Vec<u16> = if to == BROADCAST {
-            self.peers.keys().copied().collect()
-        } else {
-            vec![to]
-        };
+        let targets = self.targets(to);
         for mid in targets {
             if let Some(p) = self.peers.get_mut(&mid) {
                 p.link.send(reliable, bytes);
@@ -561,7 +647,12 @@ impl Core {
     // ── Driver input ──
 
     pub fn tick(&mut self, now: f64) {
+        self.clock = now;
         self.pump_queued(Some(now));
+        if !self.settled && self.room.is_some() && now - self.entered_at >= TOPOLOGY_WAIT_MS {
+            // No announcement (an old host): our own choice stands.
+            self.settle(self.want, now);
+        }
         if matches!(self.sock, Sock::Up | Sock::Hello) {
             if now - self.last_rx > SOCK_DEAD_MS {
                 // Silent socket: drop it and reconnect (the session resumes).
@@ -680,6 +771,7 @@ impl Core {
                     room.reclaim = self.room.as_ref().and_then(|r| r.reclaim.clone());
                     self.room = Some(room.clone());
                     self.emit(Event::RoomUpdated { room });
+                    self.room_changed(&m["room"], now);
                 }
             }
             "room_closed" => {
@@ -868,6 +960,7 @@ impl Core {
                 if self.room.is_none() {
                     // A fresh engine on an old session: learn the room and its members.
                     self.room = Some(room.clone());
+                    self.entered(Topology::Mesh, &m["room"], now);
                     let others: Vec<u16> = room
                         .members
                         .iter()
@@ -884,6 +977,9 @@ impl Core {
                     return;
                 }
                 self.room = Some(room);
+                self.room_changed(&m["room"], now);
+                // Signals sent while we were down may be lost: say it again.
+                self.announce_all();
                 for (_, p) in self.peers.iter_mut() {
                     p.link.set_open(PathId::Ws, true, now);
                 }
@@ -951,6 +1047,7 @@ impl Core {
                 return;
             };
             self.room = Some(room.clone());
+            self.entered(self.want, &m["room"], now);
             // The room first, then its peers: games learn who is who from
             // Joined before any PeerConnected arrives.
             let others: Vec<u16> = room
@@ -970,6 +1067,7 @@ impl Core {
         } else if let Ok(mut room) = serde_json::from_value::<Room>(m["room"].clone()) {
             room.reclaim = self.room.as_ref().and_then(|r| r.reclaim.clone());
             self.room = Some(room);
+            self.room_changed(&m["room"], now);
         } else if let Ok(member) = serde_json::from_value::<Member>(m["member"].clone()) {
             if let Some(x) = self
                 .room
@@ -984,6 +1082,10 @@ impl Core {
     fn left_room(&mut self) {
         self.room = None;
         self.away = None;
+        self.topology = Topology::Mesh;
+        self.settled = false;
+        self.early_announce = None;
+        self.refused.clear();
         let mids: Vec<u16> = self.peers.keys().copied().collect();
         for mid in mids {
             self.drop_peer(mid);
@@ -991,9 +1093,10 @@ impl Core {
     }
 
     fn add_peer(&mut self, mid: u16, now: f64) {
-        if self.peers.contains_key(&mid) {
+        if self.peers.contains_key(&mid) || !self.wants_link(mid) {
             return;
         }
+        self.announce(mid);
         let mut link = Link::default();
         link.set_open(PathId::Ws, self.online(), now);
         self.peers.insert(
@@ -1068,7 +1171,8 @@ impl Core {
     }
 
     fn pc_timers(&mut self, mid: u16, now: f64) {
-        let offerer = self.offerer(mid);
+        // Until the topology is known, only links that involve the host start.
+        let offerer = self.offerer(mid) && (self.settled || self.involves_host(mid));
         let online = self.online();
         let Some(p) = self.peers.get(&mid) else {
             return;
@@ -1157,6 +1261,7 @@ impl Core {
         let path = match data["pc"].as_str() {
             Some("turn") => PathId::Turn,
             Some("direct") => PathId::Direct,
+            Some("net") => return self.on_announce(from, data, now),
             _ => return,
         };
         let gen = data["gen"].as_u64().unwrap_or(0) as u32;
@@ -1170,6 +1275,11 @@ impl Core {
                 return;
             }
             self.add_peer(from, now);
+            if !self.peers.contains_key(&from) {
+                // Not a link in this room's topology (a member on a mesh
+                // build offering to us in a star): don't answer.
+                return;
+            }
         }
         if self.cfg.no_webrtc {
             return;
@@ -1204,6 +1314,138 @@ impl Core {
                 gen,
                 signal: data.clone(),
             });
+        }
+    }
+
+    // ── Topology ──
+
+    fn is_host(&self) -> bool {
+        self.room.as_ref().is_some_and(|r| r.you == r.host)
+    }
+    /// Is `mid` the host, or are we?
+    fn involves_host(&self, mid: u16) -> bool {
+        self.room
+            .as_ref()
+            .is_some_and(|r| r.you == r.host || mid == r.host)
+    }
+    /// Does this room's topology give us a link to `mid`?
+    fn wants_link(&self, mid: u16) -> bool {
+        self.topology == Topology::Mesh || self.involves_host(mid)
+    }
+
+    /// The members a send to `to` goes to; in a star, a member we have no
+    /// link to is refused out loud (once per member per room).
+    fn targets(&mut self, to: u16) -> Vec<u16> {
+        if to == BROADCAST {
+            return self.peers.keys().copied().collect();
+        }
+        if self.topology == Topology::Star && !self.peers.contains_key(&to) {
+            let known = self
+                .room
+                .as_ref()
+                .is_some_and(|r| r.members.iter().any(|m| m.mid == to));
+            let me = self.me();
+            if known && me != Some(to) && self.refused.insert(to) {
+                let host = self.room.as_ref().map_or(0, |r| r.host);
+                self.emit(Event::Error {
+                    message: format!(
+                        "no link to member {to}: this room is a star (topology \"star\"), so members link only to the host (member {host}); send to the host and have it forward"
+                    ),
+                });
+            }
+        }
+        vec![to]
+    }
+
+    /// Just came into a room (created, joined, or a fresh engine resuming).
+    fn entered(&mut self, want: Topology, raw: &Value, now: f64) {
+        self.entered_at = now;
+        self.refused.clear();
+        self.topology = want;
+        self.settled = false;
+        if let Some(t) = raw.get("topology").filter(|t| !t.is_null()) {
+            self.topology = Topology::parse(t);
+            self.settled = true;
+        } else if self.is_host() {
+            self.settled = true;
+        } else if let Some((from, t)) = self.early_announce.take() {
+            if self.room.as_ref().is_some_and(|r| r.host == from) {
+                self.topology = t;
+                self.settled = true;
+            }
+        }
+        self.early_announce = None;
+    }
+
+    /// The room changed (`room_updated`, a resume, an update's reply): follow
+    /// its topology if it states one, and keep links right if its host changed.
+    fn room_changed(&mut self, raw: &Value, now: f64) {
+        if let Some(t) = raw.get("topology").filter(|t| !t.is_null()) {
+            self.topology = Topology::parse(t);
+            self.settled = true;
+        }
+        self.reconcile(now);
+    }
+
+    fn settle(&mut self, t: Topology, now: f64) {
+        self.topology = t;
+        self.settled = true;
+        self.reconcile(now);
+    }
+
+    /// A host's topology announcement.
+    fn on_announce(&mut self, from: u16, data: &Value, now: f64) {
+        let t = Topology::parse(&data["topology"]);
+        match self.room.as_ref().map(|r| r.host) {
+            None => self.early_announce = Some((from, t)),
+            Some(host) if host == from && host != self.me().unwrap_or(0) => {
+                if !self.settled || self.topology != t {
+                    self.settle(t, now);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Make the links match the topology: add the missing ones (and have
+    /// their offerer start now), drop the ones it doesn't have. Also how a
+    /// star rebuilds around a new host, should the room's host change.
+    fn reconcile(&mut self, now: f64) {
+        let Some(room) = self.room.as_ref() else {
+            return;
+        };
+        let me = room.you;
+        let members: Vec<u16> = room
+            .members
+            .iter()
+            .map(|m| m.mid)
+            .filter(|m| *m != me)
+            .collect();
+        for mid in self.peers.keys().copied().collect::<Vec<_>>() {
+            if !self.wants_link(mid) {
+                self.drop_peer(mid);
+            }
+        }
+        for mid in members {
+            if self.wants_link(mid) && !self.peers.contains_key(&mid) {
+                self.add_peer(mid, now);
+                // Its offers may have gone unanswered while we had no link.
+                self.kick_unopened(mid, now);
+            }
+        }
+    }
+
+    /// The host tells a member the room's topology (members ignore the
+    /// others'; engines from before topologies ignore it entirely).
+    fn announce(&mut self, mid: u16) {
+        if self.is_host() && self.online() {
+            let t = self.topology.as_str();
+            self.text(json!({"t": "signal", "to": mid, "data": {"pc": "net", "topology": t}}));
+        }
+    }
+    fn announce_all(&mut self) {
+        for mid in self.peers.keys().copied().collect::<Vec<_>>() {
+            self.announce(mid);
         }
     }
 

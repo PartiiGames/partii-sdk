@@ -964,3 +964,390 @@ fn events_serialize_with_snake_case_names() {
         "away_held"
     );
 }
+
+// ── Topology (mesh / star) ──
+
+/// A tiny edge: members 1..=n in one room (1 creates and hosts), signals
+/// relayed between their cores, peer connections tracked from the actions.
+struct Party {
+    cores: BTreeMap<u16, Core>,
+    /// Live peer connections: (owner, peer, path).
+    pcs: BTreeSet<(u16, u16, PathId)>,
+    /// Every pair that ever built a peer connection (owner, peer).
+    ever: BTreeSet<(u16, u16)>,
+    host: u16,
+    now: f64,
+}
+
+fn member_json(mid: u16) -> Value {
+    json!({"mid": mid, "kind": "game", "name": "", "meta": null, "status": "active"})
+}
+
+impl Party {
+    fn new() -> Self {
+        Party {
+            cores: BTreeMap::new(),
+            pcs: BTreeSet::new(),
+            ever: BTreeSet::new(),
+            host: 1,
+            now: 0.0,
+        }
+    }
+    fn mids(&self) -> Vec<u16> {
+        self.cores.keys().copied().collect()
+    }
+    fn room_json(&self, you: u16) -> Value {
+        let mut r = room(you, &self.mids());
+        r["host"] = json!(self.host);
+        r
+    }
+    /// The next member comes in, asking for `t` (`None`: plain create/join).
+    fn add(&mut self, t: Option<Topology>) -> u16 {
+        let mid = self.cores.len() as u16 + 1;
+        let mut c = core(false);
+        online(&mut c, "turn");
+        let settings = t.map_or(Value::Null, |t| t.settings());
+        let id = if mid == 1 {
+            c.create_with("g", "game", "", Value::Null, settings)
+        } else {
+            c.join_with("ABCDE", "game", "", Value::Null, settings)
+        };
+        c.drain();
+        self.cores.insert(mid, c);
+        let r = self.room_json(mid);
+        let now = self.now;
+        self.cores
+            .get_mut(&mid)
+            .unwrap()
+            .on_text(&json!({"t": "ok", "id": id, "room": r}).to_string(), now);
+        let joined = json!({"t": "member_joined", "member": member_json(mid)}).to_string();
+        for (other, c) in self.cores.iter_mut() {
+            if *other != mid {
+                c.on_text(&joined, now);
+            }
+        }
+        self.pump();
+        mid
+    }
+    /// Carry out every core's actions until nothing is left.
+    fn pump(&mut self) {
+        for _ in 0..50 {
+            let mut work = false;
+            let mut deliver: Vec<(u16, String)> = Vec::new();
+            let mut offers: Vec<(u16, u16, PathId, u32)> = Vec::new();
+            for (me, c) in self.cores.iter_mut() {
+                for a in c.drain() {
+                    work = true;
+                    match a {
+                        Action::SendText(t) => {
+                            let Ok(v) = serde_json::from_str::<Value>(&t) else {
+                                continue;
+                            };
+                            if v["t"] == "signal" {
+                                let to = v["to"].as_u64().unwrap() as u16;
+                                deliver.push((
+                                    to,
+                                    json!({"t": "signal", "from": me, "data": v["data"]})
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                        Action::CreatePc {
+                            mid,
+                            path,
+                            gen,
+                            offerer,
+                            ..
+                        } => {
+                            self.pcs.insert((*me, mid, path));
+                            self.ever.insert((*me, mid));
+                            if offerer {
+                                offers.push((*me, mid, path, gen));
+                            }
+                        }
+                        Action::ClosePc { mid, path } => {
+                            self.pcs.remove(&(*me, mid, path));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // The offerer's driver makes an offer.
+            for (me, mid, path, gen) in offers {
+                self.cores.get_mut(&me).unwrap().on_pc_signal(
+                    mid,
+                    path,
+                    gen,
+                    json!({"type": "offer", "sdp": "x"}),
+                );
+            }
+            let now = self.now;
+            for (to, text) in deliver {
+                if let Some(c) = self.cores.get_mut(&to) {
+                    c.on_text(&text, now);
+                }
+            }
+            if !work {
+                return;
+            }
+        }
+        panic!("the party never settled");
+    }
+    /// Ticks until `t` ms (past the topology wait), pumping.
+    fn run_to(&mut self, t: f64) {
+        while self.now < t {
+            self.now += 100.0;
+            let now = self.now;
+            for c in self.cores.values_mut() {
+                c.on_text("pong", now); // the edge keeps the sockets alive
+                c.tick(now);
+            }
+            self.pump();
+        }
+    }
+    /// Distinct member pairs with a live peer connection.
+    fn pc_pairs(&self) -> BTreeSet<(u16, u16)> {
+        self.pcs
+            .iter()
+            .map(|(a, b, _)| (*a.min(b), *a.max(b)))
+            .collect()
+    }
+    fn links(&self, mid: u16) -> Vec<u16> {
+        let c = &self.cores[&mid];
+        self.mids().into_iter().filter(|m| c.linked(*m)).collect()
+    }
+    /// Pairs of non-hosts that ever built a peer connection.
+    fn non_host_pcs_ever(&self) -> usize {
+        self.ever
+            .iter()
+            .filter(|(a, b)| *a != self.host && *b != self.host)
+            .count()
+    }
+}
+
+/// Tankii's party: a host, six phones and a remote guest.
+fn party(host: Option<Topology>, members: Option<Topology>) -> Party {
+    let mut p = Party::new();
+    p.add(host);
+    for _ in 0..7 {
+        p.add(members);
+    }
+    p.run_to(TOPOLOGY_WAIT_MS + 1_000.0);
+    p
+}
+
+fn assert_star(p: &Party) {
+    let n = p.cores.len();
+    let host = p.host;
+    let others: Vec<u16> = p.mids().into_iter().filter(|m| *m != host).collect();
+    assert_eq!(p.links(host), others, "the host links to everyone");
+    for m in &others {
+        assert_eq!(p.links(*m), vec![host], "member {m} links to the host only");
+        assert_eq!(p.cores[m].topology(), Topology::Star);
+    }
+    let pairs = p.pc_pairs();
+    assert_eq!(pairs.len(), n - 1, "n - 1 links: {pairs:?}");
+    assert!(pairs.iter().all(|(a, b)| *a == host || *b == host));
+}
+
+#[test]
+fn a_mesh_links_every_pair() {
+    let p = party(None, None);
+    assert_eq!(p.pc_pairs().len(), 8 * 7 / 2);
+    assert_eq!(p.cores[&5].topology(), Topology::Mesh);
+    assert_eq!(p.links(5).len(), 7);
+}
+
+#[test]
+fn a_star_has_n_minus_one_links_and_none_between_members() {
+    let p = party(Some(Topology::Star), Some(Topology::Star));
+    assert_star(&p);
+    assert_eq!(p.non_host_pcs_ever(), 0);
+    // Both paths (TURN and direct) per link, only to the host.
+    assert_eq!(p.pcs.iter().filter(|(a, _, _)| *a == 4).count(), 2);
+    assert_eq!(p.cores[&4].stats()["topology"], "star");
+}
+
+#[test]
+fn members_follow_the_hosts_star_whatever_they_asked_for() {
+    // The phones' controller page joins with plain `join` (mesh): the host's
+    // announcement makes them a star before any member-to-member link starts.
+    let p = party(Some(Topology::Star), None);
+    assert_star(&p);
+    assert_eq!(
+        p.non_host_pcs_ever(),
+        0,
+        "no phone ever built a link to another phone"
+    );
+}
+
+#[test]
+fn members_asking_for_a_star_follow_a_mesh_host() {
+    let p = party(None, Some(Topology::Star));
+    assert_eq!(p.pc_pairs().len(), 8 * 7 / 2);
+    assert!(p.cores.values().all(|c| c.topology() == Topology::Mesh));
+}
+
+#[test]
+fn a_star_rebuilds_around_a_new_host() {
+    let mut p = party(Some(Topology::Star), None);
+    // Partii's edge closes a room whose host leaves (`host_left` /
+    // `host_lost`); should a room ever name a new host, the star follows it.
+    p.cores.remove(&1);
+    p.host = 2;
+    p.pcs.retain(|(a, b, _)| *a != 1 && *b != 1);
+    let left = json!({"t": "member_left", "mid": 1, "reason": "left"}).to_string();
+    let now = p.now;
+    for c in p.cores.values_mut() {
+        c.on_text(&left, now);
+    }
+    for mid in p.mids() {
+        let r = p.room_json(mid);
+        p.cores
+            .get_mut(&mid)
+            .unwrap()
+            .on_text(&json!({"t": "room_updated", "room": r}).to_string(), now);
+    }
+    p.pump();
+    p.run_to(now + 1_000.0);
+    assert_star(&p);
+}
+
+#[test]
+fn the_host_can_switch_a_running_room_to_a_star() {
+    let mut p = party(None, None);
+    assert_eq!(p.pc_pairs().len(), 28);
+    p.cores
+        .get_mut(&1)
+        .unwrap()
+        .update(Topology::Star.settings());
+    p.pump();
+    assert_star(&p);
+}
+
+#[test]
+fn a_topology_on_the_rooms_view_wins_at_once() {
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    let mut r = room(2, &[1, 2, 3]);
+    r["topology"] = json!("star");
+    c.on_text(&json!({"t": "ok", "id": id, "room": r}).to_string(), 0.0);
+    c.tick(10.0);
+    assert!(c.linked(1) && !c.linked(3));
+    assert!(!c
+        .drain()
+        .iter()
+        .any(|a| matches!(a, Action::CreatePc { mid: 3, .. })));
+}
+
+#[test]
+fn without_an_announcement_a_member_keeps_its_own_choice_after_the_wait() {
+    // An old host announces nothing. A mesh member holds its member-to-member
+    // offers for TOPOLOGY_WAIT_MS, then builds them; the host link starts at once.
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(2, &[1, 2, 3])}).to_string(),
+        0.0,
+    );
+    c.tick(10.0);
+    let acts = c.drain();
+    assert!(!acts
+        .iter()
+        .any(|a| matches!(a, Action::CreatePc { mid: 3, .. })));
+    c.tick(TOPOLOGY_WAIT_MS + 10.0);
+    assert!(c.drain().iter().any(|a| matches!(
+        a,
+        Action::CreatePc {
+            mid: 3,
+            offerer: true,
+            ..
+        }
+    )));
+    assert_eq!(c.topology(), Topology::Mesh);
+
+    // A star member stays a star.
+    let mut s = core(false);
+    online(&mut s, "turn");
+    let id = s.join_with("ABCDE", "game", "", Value::Null, Topology::Star.settings());
+    s.drain();
+    s.on_text(
+        &json!({"t": "ok", "id": id, "room": room(2, &[1, 2, 3])}).to_string(),
+        0.0,
+    );
+    s.tick(TOPOLOGY_WAIT_MS + 10.0);
+    assert!(s.linked(1) && !s.linked(3));
+    assert_eq!(s.topology(), Topology::Star);
+}
+
+#[test]
+fn a_star_member_ignores_offers_from_other_members() {
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.join_with("ABCDE", "game", "", Value::Null, Topology::Star.settings());
+    c.drain();
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(3, &[1, 2, 3])}).to_string(),
+        0.0,
+    );
+    c.drain();
+    c.on_text(
+        &json!({"t": "signal", "from": 2, "data": {"pc": "turn", "gen": 1, "type": "offer"}})
+            .to_string(),
+        1.0,
+    );
+    assert!(!c.linked(2));
+    assert!(!c
+        .drain()
+        .iter()
+        .any(|a| matches!(a, Action::CreatePc { .. } | Action::PcSignal { .. })));
+}
+
+#[test]
+fn in_a_star_members_send_to_the_host_and_are_told_when_they_cant() {
+    let mut c = core(true);
+    online(&mut c, "ws");
+    let id = c.join_with("ABCDE", "game", "", Value::Null, Topology::Star.settings());
+    c.drain();
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(2, &[1, 2, 3, 4])}).to_string(),
+        0.0,
+    );
+    c.drain();
+    let frames_to = |acts: &[Action]| -> Vec<u16> {
+        acts.iter()
+            .filter_map(|a| match a {
+                Action::SendBinary(b) if b[0] == RELAY_FRAME || b[0] == RELAY_BUNDLE => {
+                    Some(u16::from_be_bytes([b[1], b[2]]))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    // Broadcast reaches the host only.
+    c.send(BROADCAST, false, b"all", 5.0);
+    let acts = c.drain();
+    let to: BTreeSet<u16> = frames_to(&acts).into_iter().collect();
+    assert_eq!(to, BTreeSet::from([1]));
+    // A member we have no link to: nothing sent, one clear error.
+    c.send(3, true, b"hi", 6.0);
+    let acts = c.drain();
+    assert!(!frames_to(&acts).contains(&3));
+    let errs: Vec<Event> = events(&acts)
+        .into_iter()
+        .filter(|e| matches!(e, Event::Error { .. }))
+        .collect();
+    assert_eq!(errs.len(), 1);
+    assert!(
+        matches!(&errs[0], Event::Error { message } if message.contains("star") && message.contains("member 1"))
+    );
+    c.send(3, true, b"again", 7.0);
+    assert!(events(&c.drain()).is_empty(), "said once per member");
+    // The host is fine.
+    c.send(1, true, b"to host", 8.0);
+    assert!(frames_to(&c.drain()).contains(&1));
+}
