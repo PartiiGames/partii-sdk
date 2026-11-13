@@ -56,6 +56,10 @@ enum Cmd {
     Stats(async_channel::Sender<Value>),
     Away(async_channel::Sender<u32>),
     Back(async_channel::Sender<u32>),
+    Auth {
+        token: Option<String>,
+        reply: async_channel::Sender<u32>,
+    },
     Shutdown,
 }
 
@@ -254,6 +258,15 @@ impl Engine {
         let _ = self.cmd.try_send(Cmd::Back(tx));
         rx.recv_blocking().unwrap_or(0)
     }
+    /// Sign in on the live connection without reconnecting: attach or renew a
+    /// player token, or `None` to sign out. The reply is `Event::Authed` or
+    /// `Event::AuthFailed`; once accepted, every later hello (reconnects too)
+    /// sends this token. See `core::Core::auth`.
+    pub fn auth(&self, token: Option<String>) -> u32 {
+        let (tx, rx) = async_channel::bounded(1);
+        let _ = self.cmd.try_send(Cmd::Auth { token, reply: tx });
+        rx.recv_blocking().unwrap_or(0)
+    }
     pub fn report(&self, metrics: Value) {
         let _ = self.cmd.try_send(Cmd::Report(metrics));
     }
@@ -321,6 +334,7 @@ async fn actor(
                 Ok(Cmd::MemberUpdate { name, meta, reply }) => { let _ = reply.try_send(core.member_update(name.as_deref(), meta)); }
                 Ok(Cmd::Away(reply)) => { let _ = reply.try_send(core.away()); }
                 Ok(Cmd::Back(reply)) => { let _ = reply.try_send(core.back()); }
+                Ok(Cmd::Auth { token, reply }) => { let _ = reply.try_send(core.auth(token)); }
                 Ok(Cmd::Send { to, reliable, bytes }) => {
                     // Take every send already waiting, then flush once:
                     // bundled frames cost the relay one request, not one each.
@@ -507,6 +521,9 @@ fn apply_other(core: &mut Core, c: Cmd) -> bool {
         }
         Cmd::Back(reply) => {
             let _ = reply.try_send(core.back());
+        }
+        Cmd::Auth { token, reply } => {
+            let _ = reply.try_send(core.auth(token));
         }
         Cmd::Report(m) => core.report(m),
         Cmd::Stats(reply) => {

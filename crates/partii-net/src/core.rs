@@ -100,7 +100,7 @@ pub struct Config {
     pub away: bool,
 }
 
-pub use partii_protocol::room::{Away, IceServer, Member, Room, AWAY_CAP};
+pub use partii_protocol::room::{Away, AuthErrorCode, IceServer, Member, Room, AWAY_CAP};
 
 /// What the game sees.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -182,6 +182,30 @@ pub enum Event {
     },
     RoomUpdated {
         room: Room,
+    },
+    /// The edge took [`Core::auth`] request `req` (PROTOCOL.md "Signing in on
+    /// a live connection"): the connection is now `player_id` (`None` and
+    /// `signed_in: false` after a sign-out). `changed: false`: it already was
+    /// (a renewed token). The engine keeps the token it sent for every later
+    /// `hello`, so reconnects stay signed in. Room, members and links are as
+    /// they were; the host sees this member's `player_id` change in a
+    /// `MemberUpdated`.
+    Authed {
+        req: u32,
+        signed_in: bool,
+        player_id: Option<String>,
+        changed: bool,
+    },
+    /// [`Core::auth`] request `req` was refused (or never reached the edge:
+    /// [`AuthErrorCode::Offline`]). Nothing changed: the connection and the
+    /// token later hellos send are as they were. `retry_after_ms` comes with
+    /// `RateLimited`. (Auth replies come only as `Authed` / `AuthFailed`,
+    /// never as `Failed` or `RateLimited`.)
+    AuthFailed {
+        req: u32,
+        code: AuthErrorCode,
+        message: String,
+        retry_after_ms: Option<u64>,
     },
     /// A new engine (say, a reloaded web page that kept its `conn`) came back
     /// into the room its session was in: the same seat, nothing to join.
@@ -281,6 +305,7 @@ enum Req {
     Create,
     Join,
     Away,
+    Auth,
     Other,
 }
 
@@ -330,6 +355,9 @@ pub struct Core {
     refused: BTreeSet<u16>,
     /// The latest `now` the driver gave (for requests that carry none).
     clock: f64,
+    /// Tokens of `auth` requests in flight, by request id: on `ok` the
+    /// request's token becomes `cfg.player_token` (what later hellos send).
+    auths: BTreeMap<u32, Option<String>>,
 }
 
 impl Core {
@@ -357,6 +385,7 @@ impl Core {
             early_announce: None,
             refused: BTreeSet::new(),
             clock: 0.0,
+            auths: BTreeMap::new(),
         }
     }
 
@@ -609,6 +638,36 @@ impl Core {
         });
         id
     }
+    /// Sign in on this live connection without reconnecting (PROTOCOL.md
+    /// "Signing in on a live connection"): attach a player token, renew it, or
+    /// with `None` sign out. The room code, members and links stay. The reply
+    /// is [`Event::Authed`] or [`Event::AuthFailed`] (`bad_token`,
+    /// `player_mismatch`: another account is signed in, sign out first;
+    /// `rate_limited`: 5 a minute per connection; `offline`: the socket isn't
+    /// up, nothing sent). On `Authed` the engine keeps this token for every
+    /// later `hello` (a resume after a drop stays signed in); on a refusal it
+    /// keeps the one it had.
+    pub fn auth(&mut self, player_token: Option<String>) -> u32 {
+        if !self.online() {
+            let id = self.next_req;
+            self.next_req += 1;
+            self.emit(Event::AuthFailed {
+                req: id,
+                code: AuthErrorCode::Offline,
+                message: "not connected to partii yet".into(),
+                retry_after_ms: None,
+            });
+            return id;
+        }
+        let id = self.request(Req::Auth, partii_protocol::room::auth_frame(0, player_token.as_deref()));
+        self.auths.insert(id, player_token);
+        id
+    }
+    /// The player token this engine's hellos send (the config's, or the last
+    /// one an [`Core::auth`] got accepted).
+    pub fn player_token(&self) -> Option<&str> {
+        self.cfg.player_token.as_deref()
+    }
     pub fn report(&mut self, metrics: Value) {
         if self.online() {
             self.text(json!({"t": "report", "metrics": metrics}));
@@ -708,7 +767,19 @@ impl Core {
             p.link.set_open(PathId::Ws, false, now);
         }
         // Requests in flight on the dead socket will never be answered.
-        for (id, _) in std::mem::take(&mut self.reqs) {
+        for (id, kind) in std::mem::take(&mut self.reqs) {
+            if kind == Req::Auth {
+                // The resume's hello sends the token we had, so the edge
+                // switches back to it whether or not it took the auth.
+                self.auths.remove(&id);
+                self.emit(Event::AuthFailed {
+                    req: id,
+                    code: AuthErrorCode::Offline,
+                    message: "connection dropped".into(),
+                    retry_after_ms: None,
+                });
+                continue;
+            }
             self.emit(Event::Failed {
                 req: id,
                 code: "offline".into(),
@@ -1013,6 +1084,27 @@ impl Core {
             return;
         };
         let kind = self.reqs.remove(&id).unwrap_or(Req::Other);
+        if kind == Req::Auth {
+            let token = self.auths.remove(&id).flatten();
+            let ev = if m["t"] == "ok" {
+                self.cfg.player_token = token;
+                Event::Authed {
+                    req: id,
+                    signed_in: m["signed_in"] == true,
+                    player_id: m["player_id"].as_str().map(str::to_string),
+                    changed: m["changed"] == true,
+                }
+            } else {
+                Event::AuthFailed {
+                    req: id,
+                    code: AuthErrorCode::parse(m["code"].as_str().unwrap_or("internal")),
+                    message: m["message"].as_str().unwrap_or("").into(),
+                    retry_after_ms: m["retry_after_ms"].as_u64(),
+                }
+            };
+            self.emit(ev);
+            return;
+        }
         if kind == Req::Away && m["t"] == "ok" {
             let a = Away {
                 reason: m["reason"].as_str().unwrap_or("hint").into(),

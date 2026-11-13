@@ -1351,3 +1351,135 @@ fn in_a_star_members_send_to_the_host_and_are_told_when_they_cant() {
     c.send(1, true, b"to host", 8.0);
     assert!(frames_to(&c.drain()).contains(&1));
 }
+
+// ── auth: signing in on a live connection ──
+
+fn hello_token(c: &mut Core, now: f64) -> Value {
+    c.on_socket_closed(now);
+    c.tick(now + 10_000.0);
+    c.on_socket_open(now + 10_000.0);
+    let t = texts(&c.drain());
+    let hello = t.iter().find(|v| v["t"] == "hello").expect("a hello");
+    hello.get("player_token").cloned().unwrap_or(Value::Null)
+}
+
+#[test]
+fn auth_sends_its_frame_with_a_request_id() {
+    let mut c = in_room(2, &[1, 2]);
+    let id = c.auth(Some("pt_new".into()));
+    assert_eq!(texts(&c.drain()), vec![json!({"t": "auth", "id": id, "player_token": "pt_new"})]);
+    let out = c.auth(None);
+    assert_ne!(out, id);
+    let sent = texts(&c.drain());
+    assert_eq!(sent, vec![json!({"t": "auth", "id": out, "player_token": null})]);
+    assert!(sent[0].get("player_token").is_some(), "sign-out sends an explicit null");
+}
+
+#[test]
+fn auth_ok_keeps_the_token_for_every_later_hello() {
+    let mut c = in_room(2, &[1, 2]);
+    assert_eq!(c.player_token(), None);
+    let id = c.auth(Some("pt_new".into()));
+    c.drain();
+    c.on_text(&json!({"t": "ok", "id": id, "signed_in": true, "player_id": "p_1", "changed": true}).to_string(), 1.0);
+    assert_eq!(
+        events(&c.drain()),
+        vec![Event::Authed { req: id, signed_in: true, player_id: Some("p_1".into()), changed: true }]
+    );
+    assert_eq!(c.player_token(), Some("pt_new"));
+    assert!(c.room().is_some(), "same room");
+    // A dropped socket: the resume's hello carries the new token.
+    assert_eq!(hello_token(&mut c, 2.0), json!("pt_new"));
+
+    // A renewed token: changed false.
+    c.on_text(
+        &json!({"t": "welcome", "resumed": true, "relay": "ws", "ice_servers": [], "room": room(2, &[1, 2])}).to_string(),
+        10_002.0,
+    );
+    c.drain();
+    assert!(c.online() && c.room().is_some());
+    let id = c.auth(Some("pt_renewed".into()));
+    c.drain();
+    c.on_text(&json!({"t": "ok", "id": id, "signed_in": true, "player_id": "p_1", "changed": false}).to_string(), 1.0);
+    assert!(matches!(&events(&c.drain())[..], [Event::Authed { changed: false, .. }]));
+    assert_eq!(c.player_token(), Some("pt_renewed"));
+
+    // Sign out: later hellos send no token.
+    let id = c.auth(None);
+    c.drain();
+    c.on_text(&json!({"t": "ok", "id": id, "signed_in": false, "changed": true}).to_string(), 1.0);
+    assert_eq!(
+        events(&c.drain()),
+        vec![Event::Authed { req: id, signed_in: false, player_id: None, changed: true }]
+    );
+    assert_eq!(c.player_token(), None);
+    assert_eq!(hello_token(&mut c, 3.0), Value::Null);
+}
+
+#[test]
+fn auth_refusals_parse_and_keep_the_old_token() {
+    for (code, want, retry) in [
+        ("bad_token", AuthErrorCode::BadToken, None),
+        ("player_mismatch", AuthErrorCode::PlayerMismatch, None),
+        ("rate_limited", AuthErrorCode::RateLimited, Some(12_000u64)),
+        ("something_new", AuthErrorCode::Other("something_new".into()), None),
+    ] {
+        let mut c = core(true);
+        c.cfg.player_token = Some("pt_old".into());
+        online(&mut c, "ws");
+        let id = c.auth(Some("pt_other".into()));
+        c.drain();
+        let mut err = json!({"t": "err", "id": id, "code": code, "message": "no"});
+        if let Some(ms) = retry {
+            err["retry_after_ms"] = json!(ms);
+        }
+        c.on_text(&err.to_string(), 1.0);
+        assert_eq!(
+            events(&c.drain()),
+            vec![Event::AuthFailed { req: id, code: want, message: "no".into(), retry_after_ms: retry }],
+            "{code}: only AuthFailed (no Failed / RateLimited)"
+        );
+        assert_eq!(c.player_token(), Some("pt_old"), "{code}");
+        assert_eq!(hello_token(&mut c, 2.0), json!("pt_old"), "{code}");
+    }
+}
+
+#[test]
+fn auth_offline_or_dropped_fails_offline_and_keeps_the_old_token() {
+    let mut c = core(true);
+    c.cfg.player_token = Some("pt_old".into());
+    let id = c.auth(Some("pt_new".into()));
+    let a = c.drain();
+    assert!(texts(&a).is_empty(), "nothing sent while offline");
+    assert!(matches!(&events(&a)[..], [Event::AuthFailed { req, code: AuthErrorCode::Offline, .. }] if *req == id));
+
+    online(&mut c, "ws");
+    let id = c.auth(Some("pt_new".into()));
+    c.drain();
+    c.on_socket_closed(1.0);
+    assert!(events(&c.drain())
+        .iter()
+        .any(|e| matches!(e, Event::AuthFailed { req, code: AuthErrorCode::Offline, .. } if *req == id)));
+    // A late ok for the dead request (it can't come on a new socket, but be safe) changes nothing.
+    c.on_text(&json!({"t": "ok", "id": id, "signed_in": true, "player_id": "p_1", "changed": true}).to_string(), 2.0);
+    assert_eq!(c.player_token(), Some("pt_old"));
+    assert_eq!(hello_token(&mut c, 3.0), json!("pt_old"));
+}
+
+#[test]
+fn auth_events_serialize_for_the_web() {
+    assert_eq!(
+        serde_json::to_value(Event::Authed { req: 7, signed_in: true, player_id: Some("p_1".into()), changed: true }).unwrap(),
+        json!({"ev": "authed", "req": 7, "signed_in": true, "player_id": "p_1", "changed": true})
+    );
+    assert_eq!(
+        serde_json::to_value(Event::AuthFailed {
+            req: 7,
+            code: AuthErrorCode::RateLimited,
+            message: "busy".into(),
+            retry_after_ms: Some(500)
+        })
+        .unwrap(),
+        json!({"ev": "auth_failed", "req": 7, "code": "rate_limited", "message": "busy", "retry_after_ms": 500})
+    );
+}

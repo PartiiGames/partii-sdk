@@ -189,6 +189,13 @@ impl Rooms {
         self.room.as_ref()
     }
 
+    /// Sign in on the live connection without leaving the room (`None` signs
+    /// out). The reply arrives as `Authed` / `AuthFailed` in a [`RoomEvent`];
+    /// once accepted, reconnects keep the new token. Returns the request id.
+    pub fn auth(&self, token: Option<String>) -> u32 {
+        self.engine.auth(token)
+    }
+
     /// The engine, for anything not wrapped here.
     pub fn engine(&self) -> &partii_net::Engine {
         &self.engine

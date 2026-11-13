@@ -544,6 +544,10 @@ impl Engine {
     pub fn back(&self) -> u32 {
         self.act(|c| c.back())
     }
+    /// Sign in on the live connection (or `None` to sign out). See `Core::auth`.
+    pub fn auth(&self, token: Option<String>) -> u32 {
+        self.act(|c| c.auth(token))
+    }
     pub fn online(&self) -> bool {
         self.sh.borrow().core.online()
     }
@@ -663,6 +667,16 @@ impl WebEngine {
     /// survived; a reconnect is back on its own. A no-op when not away.
     pub fn back(&self) -> u32 {
         self.e.back()
+    }
+
+    /// Sign in on this live connection without reconnecting: a player token
+    /// (`"pt_…"`), or `null`/`undefined` to sign out. Returns the request id;
+    /// the reply is an `authed` event (`{req, signed_in, player_id, changed}`)
+    /// or `auth_failed` (`{req, code: "bad_token" | "player_mismatch" |
+    /// "rate_limited" | "offline" | …, message, retry_after_ms}`). Once
+    /// accepted, reconnects send this token in their hello.
+    pub fn auth(&self, token: Option<String>) -> u32 {
+        self.e.auth(token)
     }
 
     /// Send bytes to a member (0xFFFF = everyone).

@@ -155,3 +155,99 @@ mod tests {
         assert_eq!(back, r);
     }
 }
+
+/// Why the edge refused an `auth` (PROTOCOL.md "Signing in on a live
+/// connection"). Whatever the code, nothing changed: the connection is
+/// signed in (or not) as it was. Serializes as its wire string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum AuthErrorCode {
+    /// `bad_token`: the token proves no player (bad, expired, or a deleted player).
+    BadToken,
+    /// `player_mismatch`: the connection is signed in as another account. Sign
+    /// out first (`auth` with no token) or reconnect.
+    PlayerMismatch,
+    /// `rate_limited`: 5 a minute per connection, 30 per network; wait `retry_after_ms`.
+    RateLimited,
+    /// `offline`: not sent (the socket wasn't up) or the socket dropped before the answer.
+    Offline,
+    /// Any other code (`unauthorized`, `internal`, a code newer than this SDK).
+    Other(String),
+}
+
+impl AuthErrorCode {
+    pub const BAD_TOKEN: &'static str = "bad_token";
+    pub const PLAYER_MISMATCH: &'static str = "player_mismatch";
+    pub const RATE_LIMITED: &'static str = "rate_limited";
+    pub const OFFLINE: &'static str = "offline";
+
+    pub fn parse(code: &str) -> Self {
+        match code {
+            Self::BAD_TOKEN => Self::BadToken,
+            Self::PLAYER_MISMATCH => Self::PlayerMismatch,
+            Self::RATE_LIMITED => Self::RateLimited,
+            Self::OFFLINE => Self::Offline,
+            other => Self::Other(other.to_string()),
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::BadToken => Self::BAD_TOKEN,
+            Self::PlayerMismatch => Self::PLAYER_MISMATCH,
+            Self::RateLimited => Self::RATE_LIMITED,
+            Self::Offline => Self::OFFLINE,
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl From<String> for AuthErrorCode {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+impl From<AuthErrorCode> for String {
+    fn from(c: AuthErrorCode) -> Self {
+        c.as_str().to_string()
+    }
+}
+impl std::fmt::Display for AuthErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The `auth` frame: attach (`Some`), renew, or drop (`None`, signs out) the
+/// connection's player token without reconnecting.
+pub fn auth_frame(id: u32, player_token: Option<&str>) -> Value {
+    serde_json::json!({"t": "auth", "id": id, "player_token": player_token})
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn auth_codes_round_trip_and_keep_unknown_ones() {
+        for (s, c) in [
+            ("bad_token", AuthErrorCode::BadToken),
+            ("player_mismatch", AuthErrorCode::PlayerMismatch),
+            ("rate_limited", AuthErrorCode::RateLimited),
+            ("offline", AuthErrorCode::Offline),
+            ("unauthorized", AuthErrorCode::Other("unauthorized".into())),
+        ] {
+            assert_eq!(AuthErrorCode::parse(s), c);
+            assert_eq!(c.as_str(), s);
+            assert_eq!(serde_json::to_value(&c).unwrap(), serde_json::json!(s));
+            assert_eq!(serde_json::from_value::<AuthErrorCode>(serde_json::json!(s)).unwrap(), c);
+        }
+    }
+
+    #[test]
+    fn auth_frames() {
+        assert_eq!(auth_frame(7, Some("pt_x")), serde_json::json!({"t": "auth", "id": 7, "player_token": "pt_x"}));
+        let out = auth_frame(8, None);
+        assert!(out.get("player_token").is_some_and(Value::is_null), "sign-out sends an explicit null");
+        assert_eq!(out, serde_json::json!({"t": "auth", "id": 8, "player_token": null}));
+    }
+}

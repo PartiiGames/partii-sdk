@@ -14,4 +14,4 @@ pub mod abi;
 pub mod host;
 pub mod room;
 
-pub use room::{IceServer, Member, Room, BROADCAST};
+pub use room::{AuthErrorCode, IceServer, Member, Room, BROADCAST};
