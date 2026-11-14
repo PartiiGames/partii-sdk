@@ -6,7 +6,8 @@
 //! to a flight or a dead Wi-Fi. A session is one launch: `session_start` is
 //! queued when the account starts, `session_end {secs}` by `end_session`.
 //! `install_panic_hook` writes a panic to the data folder; the next flush
-//! (this launch, if it survived, or the next) reports it.
+//! (this launch, if it survived, or the next) reports it, with its raw frames
+//! (crash_addrs.rs) for symbolizing a stripped build offline.
 //!
 //! With analytics off (`AccountConfig::analytics`, `set_analytics`), nothing
 //! is queued or sent, and what was queued is dropped.
@@ -239,6 +240,18 @@ fn error_json(
     e
 }
 
+/// The raw crash fields of a panic entry (crash_addrs.rs), copied onto its
+/// report. partii checks each and drops what it can't use.
+const NATIVE_FIELDS: [&str; 5] = ["frames", "modules", "build_id", "main", "arch"];
+
+fn with_native(e: &mut Value, entry: &Value) {
+    for k in NATIVE_FIELDS {
+        if let Some(v) = entry.get(k).filter(|v| !v.is_null()) {
+            e[k] = v.clone();
+        }
+    }
+}
+
 /// What happened to one send.
 enum Sent {
     Ok,
@@ -290,14 +303,16 @@ fn run(s: Setup, q: Arc<(Mutex<Queue>, Condvar)>, st: Arc<Mutex<State>>, session
             if g.enabled {
                 for p in list {
                     let ctx = json!({ "thread": p["thread"], "location": p["location"], "version_at_crash": p["version"], "previous_launch": p["session"] != json!(session) });
-                    g.errors.push(error_json(
+                    let mut e = error_json(
                         "panic",
                         p["message"].as_str().unwrap_or("panic"),
                         p["backtrace"].as_str(),
                         ctx,
                         p["session"].as_str().unwrap_or(""),
                         p["at"].as_u64().unwrap_or_else(now_ms),
-                    ));
+                    );
+                    with_native(&mut e, &p);
+                    g.errors.push(e);
                 }
             }
         }
@@ -386,7 +401,9 @@ fn run(s: Setup, q: Arc<(Mutex<Queue>, Condvar)>, st: Arc<Mutex<State>>, session
 
 /// Write panics to `data_dir` so the account reports them (at once if the
 /// game survives, else at the next launch). Call it first thing in main;
-/// the existing hook (the usual stderr message) still runs.
+/// the existing hook (the usual stderr message) still runs. Each panic also
+/// carries its raw frames (module + offset, ≤96) and modules' build ids
+/// (≤24), so a stripped build's crash can be symbolized offline.
 pub fn install_panic_hook(data_dir: impl Into<PathBuf>) {
     let dir: PathBuf = data_dir.into();
     let previous = std::panic::take_hook();
@@ -402,6 +419,8 @@ pub fn install_panic_hook(data_dir: impl Into<PathBuf>) {
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_default();
+        // The raw frames first, while the stack is the panic's.
+        let native = crate::crash_addrs::capture().to_json();
         let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         let (session, version) = SESSION
             .lock()
@@ -413,7 +432,9 @@ pub fn install_panic_hook(data_dir: impl Into<PathBuf>) {
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
-        list.push(json!({ "message": message, "location": location, "backtrace": backtrace, "thread": std::thread::current().name().unwrap_or(""), "session": session, "version": version, "at": now_ms() }));
+        let mut entry = json!({ "message": message, "location": location, "backtrace": backtrace, "thread": std::thread::current().name().unwrap_or(""), "session": session, "version": version, "at": now_ms() });
+        with_native(&mut entry, &native);
+        list.push(entry);
         let over = list.len().saturating_sub(PANICS_KEPT);
         list.drain(..over);
         let _ = std::fs::create_dir_all(&dir);

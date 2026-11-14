@@ -42,6 +42,7 @@
 
 mod analytics;
 pub mod buy;
+mod crash_addrs;
 pub use analytics::{install_panic_hook, this_platform, MAX_QUEUED};
 pub use buy::{BuyOutcome, BuyStatus};
 
@@ -1192,6 +1193,86 @@ mod tests {
             .map(|h| h.join().unwrap())
             .collect();
         assert!(ids.iter().all(|i| i == &ids[0]), "{ids:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A panic through the hook is reported with its raw frames (module +
+    /// offset) and build ids, for a stripped build to be symbolized offline.
+    #[test]
+    fn a_panic_report_carries_raw_frames() {
+        #[inline(never)]
+        fn panics_here() {
+            panic!("raw frames test panic");
+        }
+        let dir = std::env::temp_dir().join(format!("partii-account-panic-{}", now_ms()));
+        install_panic_hook(dir.clone());
+        let _ = std::panic::catch_unwind(panics_here);
+        let _ = std::panic::take_hook();
+        let written: Vec<Value> =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("partii-panic.json")).unwrap())
+                .unwrap();
+        let entry = written
+            .iter()
+            .find(|p| p["message"] == "raw frames test panic")
+            .expect("the hook wrote it");
+        let native = cfg!(any(
+            all(
+                any(target_os = "linux", target_os = "android"),
+                target_pointer_width = "64",
+                not(target_arch = "arm")
+            ),
+            target_os = "macos",
+            target_os = "ios",
+            windows
+        ));
+        if native {
+            let frames = entry["frames"].as_array().expect("frames");
+            assert!(frames.len() >= 3 && frames.len() <= 96, "{entry}");
+            let me = std::env::current_exe()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(entry["main"], json!(me), "{entry}");
+            assert!(
+                frames.iter().filter(|f| f["module"] == json!(me)).count() >= 2,
+                "{entry}"
+            );
+            assert!(
+                entry["modules"]
+                    .as_array()
+                    .is_some_and(|m| !m.is_empty() && m.len() <= 24),
+                "{entry}"
+            );
+        } else {
+            assert!(entry.get("frames").is_none(), "{entry}");
+        }
+        // The next launch (offline here) queues the report with them.
+        let a = Account::start(AccountConfig {
+            edge: "http://127.0.0.1:9".into(),
+            key: Some("pk_x".into()),
+            game: "panicframes".into(),
+            data_dir: dir.clone(),
+            version: "1.0.0".into(),
+            ..AccountConfig::default()
+        });
+        assert!(!a.end_session(std::time::Duration::from_secs(5)));
+        let kept: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("partii-analytics-panicframes.json")).unwrap(),
+        )
+        .unwrap();
+        let e = kept["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["message"] == "raw frames test panic")
+            .expect("queued")
+            .clone();
+        assert_eq!(e["kind"], "panic");
+        for k in ["frames", "modules", "build_id", "main", "arch"] {
+            assert_eq!(e.get(k), entry.get(k), "{k}: {e}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
