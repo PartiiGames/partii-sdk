@@ -6,6 +6,8 @@
 
 mod generated;
 pub use generated::OPS;
+/// The game's feature flags (remote config), offline-safe: [`flags::Flags`].
+pub mod flags;
 /// Reports to the game's developer from inside the game, files and all: [`reports::submit`].
 pub mod reports;
 
