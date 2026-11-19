@@ -261,14 +261,38 @@ enum Sent {
     Drop,
 }
 
+/// One batch out; logs "analytics: sent N events, HTTP <status>" (counts and
+/// the status only: never the device, session or key).
 fn post(c: &Client, op: &str, game: &str, body: Value) -> Sent {
-    match c.json(op, &[("game", game)], Some(body)) {
-        Ok(v) if v["ok"] == true => Sent::Ok,
-        Ok(v) => match v["error"]["code"].as_str() {
-            Some("bad_request") | Some("not_found") | Some("unauthorized") => Sent::Drop,
-            _ => Sent::Later,
-        },
-        Err(_) => Sent::Later,
+    let n = ["events", "errors"]
+        .iter()
+        .find_map(|k| body[*k].as_array().map(|a| (a.len(), *k)));
+    let Some(def) = partii_client::op(op) else {
+        return Sent::Later;
+    };
+    let args = [("game".to_string(), game.to_string())].into_iter().collect();
+    let reply = c.call(def, &args, Some(&body), None, false);
+    let (n, what) = n.unwrap_or((0, "events"));
+    let v = match reply {
+        Ok(partii_client::Reply::Json { status, body }) => {
+            log::info!("analytics: sent {n} {what}, HTTP {status}");
+            body
+        }
+        Ok(partii_client::Reply::Bytes { status, .. }) => {
+            log::info!("analytics: sent {n} {what}, HTTP {status}");
+            Value::Null
+        }
+        Err(e) => {
+            log::info!("analytics: sent {n} {what}, no answer ({})", e.code);
+            return Sent::Later;
+        }
+    };
+    if v["ok"] == true {
+        return Sent::Ok;
+    }
+    match v["error"]["code"].as_str() {
+        Some("bad_request") | Some("not_found") | Some("unauthorized") => Sent::Drop,
+        _ => Sent::Later,
     }
 }
 
