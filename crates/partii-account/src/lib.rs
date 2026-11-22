@@ -1196,10 +1196,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The panic hook is process-wide: tests that set it take turns.
+    static HOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A panic through the hook is reported with its raw frames (module +
     /// offset) and build ids, for a stripped build to be symbolized offline.
     #[test]
     fn a_panic_report_carries_raw_frames() {
+        let _hook = HOOK.lock().unwrap_or_else(|p| p.into_inner());
         #[inline(never)]
         fn panics_here() {
             panic!("raw frames test panic");
@@ -1273,6 +1277,65 @@ mod tests {
         for k in ["frames", "modules", "build_id", "main", "arch"] {
             assert_eq!(e.get(k), entry.get(k), "{k}: {e}");
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A track build's panic carries its track (read at hook install) into the
+    /// report's context; a production build's has none, not a null.
+    #[test]
+    fn a_panic_report_carries_the_track() {
+        let _hook = HOOK.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(
+            analytics::track_of(Some("playtest-dec".into())).as_deref(),
+            Some("playtest-dec")
+        );
+        for bad in ["", "Dev", "a b", "x".repeat(33).as_str()] {
+            assert_eq!(analytics::track_of(Some(bad.into())), None, "{bad:?}");
+        }
+        assert_eq!(analytics::track_of(None), None);
+
+        let dir = std::env::temp_dir().join(format!("partii-account-track-{}", now_ms()));
+        analytics::install_hook(dir.clone(), Some("playtest".into()));
+        let _ = std::panic::catch_unwind(|| panic!("track test panic"));
+        let _ = std::panic::take_hook();
+        analytics::install_hook(dir.clone(), None);
+        let _ = std::panic::catch_unwind(|| panic!("no track test panic"));
+        let _ = std::panic::take_hook();
+        let written: Vec<Value> =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("partii-panic.json")).unwrap())
+                .unwrap();
+        let entry = |m: &str| written.iter().find(|p| p["message"] == m).expect(m).clone();
+        assert_eq!(entry("track test panic")["track"], "playtest");
+        assert!(entry("no track test panic").get("track").is_none());
+
+        // The next launch (offline here) queues both, the track in context.
+        let a = Account::start(AccountConfig {
+            edge: "http://127.0.0.1:9".into(),
+            key: Some("pk_x".into()),
+            game: "panictrack".into(),
+            data_dir: dir.clone(),
+            version: "1.0.0".into(),
+            ..AccountConfig::default()
+        });
+        assert!(!a.end_session(std::time::Duration::from_secs(5)));
+        let kept: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("partii-analytics-panictrack.json")).unwrap(),
+        )
+        .unwrap();
+        let queued = |m: &str| {
+            kept["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["message"] == m)
+                .expect(m)
+                .clone()
+        };
+        let with = queued("track test panic");
+        assert_eq!(with["context"]["track"], "playtest", "{with}");
+        let without = queued("no track test panic");
+        assert!(without["context"].get("track").is_none(), "{without}");
+        assert!(without["context"].get("thread").is_some(), "{without}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

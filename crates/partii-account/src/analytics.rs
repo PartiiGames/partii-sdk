@@ -270,7 +270,9 @@ fn post(c: &Client, op: &str, game: &str, body: Value) -> Sent {
     let Some(def) = partii_client::op(op) else {
         return Sent::Later;
     };
-    let args = [("game".to_string(), game.to_string())].into_iter().collect();
+    let args = [("game".to_string(), game.to_string())]
+        .into_iter()
+        .collect();
     let reply = c.call(def, &args, Some(&body), None, false);
     let (n, what) = n.unwrap_or((0, "events"));
     let v = match reply {
@@ -326,7 +328,12 @@ fn run(s: Setup, q: Arc<(Mutex<Queue>, Condvar)>, st: Arc<Mutex<State>>, session
             let mut g = m.lock().unwrap_or_else(|p| p.into_inner());
             if g.enabled {
                 for p in list {
-                    let ctx = json!({ "thread": p["thread"], "location": p["location"], "version_at_crash": p["version"], "previous_launch": p["session"] != json!(session) });
+                    let mut ctx = json!({ "thread": p["thread"], "location": p["location"], "version_at_crash": p["version"], "previous_launch": p["session"] != json!(session) });
+                    // The track at crash time; absent (never null: the edge
+                    // drops a context with a null) for a production build.
+                    if let Some(t) = p["track"].as_str() {
+                        ctx["track"] = json!(t);
+                    }
                     let mut e = error_json(
                         "panic",
                         p["message"].as_str().unwrap_or("panic"),
@@ -428,8 +435,29 @@ fn run(s: Setup, q: Arc<(Mutex<Queue>, Condvar)>, st: Arc<Mutex<State>>, session
 /// the existing hook (the usual stderr message) still runs. Each panic also
 /// carries its raw frames (module + offset, ≤96) and modules' build ids
 /// (≤24), so a stripped build's crash can be symbolized offline.
+///
+/// A track build (partii's docs/TRACKS.md) starts with `PARTII_TRACK=<name>`;
+/// it's read once here and stamped into each panic as `track`, so the report
+/// names the build that crashed even if the next launch is another one.
+/// Unset, empty or not a track name (1-32 of `a-z`, `0-9`, `-`): no `track`.
 pub fn install_panic_hook(data_dir: impl Into<PathBuf>) {
-    let dir: PathBuf = data_dir.into();
+    install_hook(
+        data_dir.into(),
+        track_of(std::env::var("PARTII_TRACK").ok()),
+    );
+}
+
+/// The track a build was launched from, when it's a valid track name (the
+/// edge's rule; anything else would make it drop the report's context).
+pub(crate) fn track_of(v: Option<String>) -> Option<String> {
+    v.filter(|t| {
+        (1..=32).contains(&t.len())
+            && t.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })
+}
+
+pub(crate) fn install_hook(dir: PathBuf, track: Option<String>) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let message = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -457,6 +485,9 @@ pub fn install_panic_hook(data_dir: impl Into<PathBuf>) {
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         let mut entry = json!({ "message": message, "location": location, "backtrace": backtrace, "thread": std::thread::current().name().unwrap_or(""), "session": session, "version": version, "at": now_ms() });
+        if let Some(t) = &track {
+            entry["track"] = json!(t);
+        }
         with_native(&mut entry, &native);
         list.push(entry);
         let over = list.len().saturating_sub(PANICS_KEPT);
