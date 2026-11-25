@@ -67,7 +67,7 @@ if [ "$build" = 1 ]; then
 fi
 
 : > "$out/heartbeat"
-python3 "$here/orchestrate.py" --image "$image" --edge "$PARTII_EDGE" --out "$out" "${pass[@]}" &
+python3 "$here/orchestrate.py" --image "$image" --edge "$PARTII_EDGE" --out "$out" ${pass[@]+"${pass[@]}"} &
 orch=$!
 pids+=("$orch")
 start=$(date +%s)
