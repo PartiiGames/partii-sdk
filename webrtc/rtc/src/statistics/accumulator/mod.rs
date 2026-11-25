@@ -543,8 +543,11 @@ impl RTCStatsAccumulator {
             .entry(format!("RTCIceCandidatePair_{}_{}", local_id, remote_id))
             .or_insert_with(|| IceCandidatePairAccumulator {
                 transport_id: self.transport.transport_id.clone(),
-                local_candidate_id: local_id.to_string(),
-                remote_candidate_id: remote_id.to_string(),
+                // The ids of the candidates' own stats entries (as registered by
+                // `register_local_candidate` / `register_remote_candidate`), so
+                // `localCandidateId` / `remoteCandidateId` resolve in the report.
+                local_candidate_id: format!("RTCLocalIceCandidate_{local_id}"),
+                remote_candidate_id: format!("RTCRemoteIceCandidate_{remote_id}"),
                 ..Default::default()
             })
     }
@@ -850,5 +853,29 @@ impl RTCStatsAccumulator {
 
         // Remove codecs that are not referenced
         self.codecs.retain(|id, _| referenced.contains(id));
+    }
+}
+
+#[cfg(test)]
+mod candidate_pair_ids {
+    use super::*;
+    use crate::statistics::report::RTCStatsReportEntry;
+
+    #[test]
+    fn a_pairs_candidate_ids_name_the_candidates_stats_entries() {
+        let mut acc = RTCStatsAccumulator::new();
+        acc.register_local_candidate("RTCLocalIceCandidate_abc".into(), IceCandidateAccumulator::default());
+        acc.register_remote_candidate("RTCRemoteIceCandidate_xyz".into(), IceCandidateAccumulator::default());
+        acc.get_or_create_candidate_pair("abc", "xyz").nominated = true;
+        let report = acc.snapshot(Instant::now());
+        let pair = report
+            .iter()
+            .find_map(|e| match e {
+                RTCStatsReportEntry::IceCandidatePair(p) => Some(p),
+                _ => None,
+            })
+            .expect("a pair");
+        assert!(matches!(report.get(&pair.local_candidate_id), Some(RTCStatsReportEntry::LocalCandidate(_))));
+        assert!(matches!(report.get(&pair.remote_candidate_id), Some(RTCStatsReportEntry::RemoteCandidate(_))));
     }
 }
