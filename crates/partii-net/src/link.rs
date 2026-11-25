@@ -112,6 +112,9 @@ pub struct Link {
     /// Paths this link may use (`Config::paths`); a path left out never
     /// opens and its datagrams are ignored.
     allowed: [bool; 3],
+    /// When play last moved onto the ws relay (it is judged by its idle
+    /// window until it answers a ping sent after that).
+    ws_since: f64,
 }
 
 impl Default for Link {
@@ -126,6 +129,7 @@ impl Default for Link {
             unrel: VecDeque::new(),
             events: VecDeque::new(),
             connected_at: None,
+            ws_since: f64::NEG_INFINITY,
             allowed: [true; 3],
         }
     }
@@ -140,7 +144,15 @@ impl Link {
     }
     /// Is path `p` alive, judged by its own ping cadence?
     fn alive(&self, p: PathId, now: f64) -> bool {
-        let dead = if p == PathId::Ws && self.current != PathId::Ws {
+        // An idle ws relay is pinged every WS_IDLE_PING_MS: right after play
+        // fails over to it, its last pong is that old, which is no sign of
+        // trouble (it was a second failover onto a dying path).
+        let idle = self.current != PathId::Ws
+            || self
+                .path(PathId::Ws)
+                .last_pong
+                .is_some_and(|t| t < self.ws_since);
+        let dead = if p == PathId::Ws && idle {
             WS_IDLE_DEAD_MS
         } else {
             DEAD_MS
@@ -437,6 +449,11 @@ impl Link {
         let from = self.current;
         self.current = to;
         self.candidate = None;
+        if to == PathId::Ws {
+            self.ws_since = now;
+            // Measure it now rather than at the idle cadence.
+            self.path_mut(PathId::Ws).last_ping = f64::NEG_INFINITY;
+        }
         self.tx.rush();
         if self.connected_at.is_none() && self.usable(to, now) {
             self.connected_at = Some(now);
