@@ -32,6 +32,13 @@ const PC_OPEN_TIMEOUT_MS: f64 = 7_000.0;
 const PC_RECOVER_MS: f64 = 60_000.0;
 const PC_RECOVER_RETRY_MS: f64 = 1_000.0;
 const PC_RECOVER_OPEN_MS: f64 = 4_500.0;
+/// A join the edge failed with a transient error (`internal`: a Durable
+/// Object call lost in transit; `unavailable`) is sent again up to this many
+/// times, `JOIN_RETRY_MS` then twice that apart, before the game hears
+/// `Failed`. Joins are idempotent per conn on the edge, so a join that did
+/// land returns the same seat.
+pub const JOIN_RETRIES: u32 = 2;
+pub const JOIN_RETRY_MS: f64 = 250.0;
 pub use partii_protocol::room::{BROADCAST, RELAY_BUNDLE, RELAY_FRAME};
 /// A member that joined a room it did not create holds its non-host WebRTC
 /// paths this long for the host's topology announcement (see [`Topology`]).
@@ -366,6 +373,10 @@ pub struct Core {
     /// `OFFLINE_QUEUE_MS`.
     queued: Vec<(u32, Value, Option<f64>)>,
     reqs: BTreeMap<u32, Req>,
+    /// Joins in flight: (message, retries so far), and retries waiting to
+    /// be sent: (when, id).
+    joins: BTreeMap<u32, (Value, u32)>,
+    join_retry: Vec<(f64, u32)>,
     out: VecDeque<Action>,
     last_rx: f64,
     last_ping: f64,
@@ -408,6 +419,8 @@ impl Core {
             next_req: 1,
             queued: Vec::new(),
             reqs: BTreeMap::new(),
+            joins: BTreeMap::new(),
+            join_retry: Vec::new(),
             out: VecDeque::new(),
             last_rx: 0.0,
             last_ping: 0.0,
@@ -617,9 +630,18 @@ impl Core {
                 }
             }
         }
-        self.request(Req::Join, v)
+        let id = self.request(Req::Join, v.clone());
+        if self.reqs.contains_key(&id) {
+            v["id"] = json!(id);
+            self.joins.insert(id, (v, 0));
+        }
+        id
     }
     pub fn leave(&mut self) -> u32 {
+        for (_, id) in std::mem::take(&mut self.join_retry) {
+            self.reqs.remove(&id);
+        }
+        self.joins.clear();
         let id = self.request(Req::Other, json!({"t": "leave"}));
         self.left_room();
         id
@@ -761,6 +783,20 @@ impl Core {
     pub fn tick(&mut self, now: f64) {
         self.clock = now;
         self.pump_queued(Some(now));
+        if self.join_retry.iter().any(|(t, _)| now >= *t) {
+            let (due, wait): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut self.join_retry).into_iter().partition(|(t, _)| now >= *t);
+            self.join_retry = wait;
+            for (_, id) in due {
+                let Some((v, _)) = self.joins.get(&id) else { continue };
+                let v = v.clone();
+                if self.online() {
+                    self.text(v);
+                } else {
+                    self.queued.push((id, v, None));
+                }
+            }
+        }
         if !self.settled && self.room.is_some() && now - self.entered_at >= TOPOLOGY_WAIT_MS {
             // No announcement: an old host, which meshes. A member that
             // asked for a topology keeps it; one that didn't meshes too.
@@ -820,7 +856,10 @@ impl Core {
         for (_, p) in self.peers.iter_mut() {
             p.link.set_open(PathId::Ws, false, now);
         }
-        // Requests in flight on the dead socket will never be answered.
+        // Requests in flight on the dead socket will never be answered (a
+        // join waiting for its retry fails with them).
+        self.joins.clear();
+        self.join_retry.clear();
         for (id, kind) in std::mem::take(&mut self.reqs) {
             if kind == Req::Auth {
                 // The resume's hello sends the token we had, so the edge
@@ -1200,6 +1239,22 @@ impl Core {
                 grace_ms,
             });
             return;
+        }
+        if kind == Req::Join {
+            let code = m["code"].as_str().unwrap_or("internal");
+            let transient = m["t"] == "err" && matches!(code, "internal" | "unavailable");
+            match self.joins.get_mut(&id) {
+                Some((_, tries)) if transient && *tries < JOIN_RETRIES => {
+                    let wait = JOIN_RETRY_MS * 2f64.powi(*tries as i32);
+                    *tries += 1;
+                    self.reqs.insert(id, Req::Join);
+                    self.join_retry.push((now + wait, id));
+                    return;
+                }
+                _ => {
+                    self.joins.remove(&id);
+                }
+            }
         }
         if m["t"] == "err" {
             if let Some(ms) = m["retry_after_ms"].as_u64() {

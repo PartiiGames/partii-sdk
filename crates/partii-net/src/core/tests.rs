@@ -1814,3 +1814,82 @@ fn a_path_that_never_opened_keeps_the_normal_backoff() {
     assert!(gaps.len() >= 2 && gaps[1] > gaps[0] + 500.0, "backoff grows: {gaps:?}");
     assert!(gaps[0] >= PC_OPEN_TIMEOUT_MS, "full timeout: {gaps:?}");
 }
+
+/// syd's join on 2026-11-24 failed with `internal: Error: Network
+/// connection lost` (a Durable Object call lost in transit). Such a join is
+/// sent again (same id, the edge's join is idempotent per conn) with
+/// backoff, and the game hears only the final outcome.
+#[test]
+fn a_join_that_fails_transiently_is_retried_with_backoff() {
+    let mut c = core(true);
+    online(&mut c, "ws");
+    let id = c.join("ABCDE", "game", "Ann", Value::Null);
+    let sent = texts(&c.drain());
+    assert_eq!(sent.iter().filter(|t| t["t"] == "join").count(), 1);
+    let lost = json!({"t": "err", "id": id, "code": "internal", "message": "Error: Network connection lost."}).to_string();
+    c.on_text(&lost, 100.0);
+    assert!(events(&c.drain()).is_empty(), "no Failed while retrying");
+    c.tick(100.0 + JOIN_RETRY_MS - 1.0);
+    assert!(texts(&c.drain()).is_empty(), "waits out the backoff");
+    c.tick(100.0 + JOIN_RETRY_MS);
+    let again = texts(&c.drain());
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0]["t"], "join");
+    assert_eq!(again[0]["id"], id);
+    assert_eq!(again[0]["name"], "Ann");
+    // Second failure: twice the wait, then it lands.
+    c.on_text(&lost, 400.0);
+    c.tick(400.0 + JOIN_RETRY_MS);
+    assert!(texts(&c.drain()).is_empty());
+    c.tick(400.0 + 2.0 * JOIN_RETRY_MS);
+    assert_eq!(texts(&c.drain())[0]["id"], id);
+    c.on_text(&json!({"t": "ok", "id": id, "room": room(2, &[1, 2])}).to_string(), 1000.0);
+    let evs = events(&c.drain());
+    assert!(evs.iter().any(|e| matches!(e, Event::Joined { req, .. } if *req == id)));
+    assert!(!evs.iter().any(|e| matches!(e, Event::Failed { .. })));
+}
+
+#[test]
+fn a_join_gives_up_after_the_cap_and_never_retries_real_refusals() {
+    let mut c = core(true);
+    online(&mut c, "ws");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    let lost = json!({"t": "err", "id": id, "code": "internal", "message": "lost"}).to_string();
+    let mut t = 0.0;
+    for _ in 0..JOIN_RETRIES {
+        c.on_text(&lost, t);
+        t += 1_000.0;
+        c.tick(t);
+        assert_eq!(texts(&c.drain()).len(), 1, "retried");
+    }
+    c.on_text(&lost, t);
+    let evs = events(&c.drain());
+    assert!(evs.iter().any(|e| matches!(e, Event::Failed { req, code, .. } if *req == id && code == "internal")));
+    c.tick(t + 1_000.0);
+    assert!(texts(&c.drain()).is_empty(), "no retry after the cap");
+
+    // A refusal is not transient: straight to the game.
+    let id = c.join("ZZZZZ", "game", "", Value::Null);
+    c.drain();
+    c.on_text(&json!({"t": "err", "id": id, "code": "not_found", "message": "no room"}).to_string(), t);
+    assert!(events(&c.drain()).iter().any(|e| matches!(e, Event::Failed { req, code, .. } if *req == id && code == "not_found")));
+    c.tick(t + 1_000.0);
+    assert!(texts(&c.drain()).is_empty());
+}
+
+#[test]
+fn a_join_waiting_for_its_retry_fails_once_when_the_socket_drops() {
+    let mut c = core(true);
+    online(&mut c, "ws");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(&json!({"t": "err", "id": id, "code": "internal", "message": "lost"}).to_string(), 0.0);
+    c.on_socket_closed(10.0);
+    let failed = |evs: &[Event]| evs.iter().filter(|e| matches!(e, Event::Failed { req, .. } if *req == id)).count();
+    assert_eq!(failed(&events(&c.drain())), 1);
+    c.tick(2_000.0);
+    let acts = c.drain();
+    assert!(texts(&acts).iter().all(|t| t["t"] != "join"), "no retry on a dropped socket");
+    assert_eq!(failed(&events(&acts)), 0);
+}
