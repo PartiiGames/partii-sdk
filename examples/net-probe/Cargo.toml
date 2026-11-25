@@ -1,0 +1,17 @@
+[package]
+name = "net-probe"
+version = "0.1.0"
+description = "Measure partii-net's three paths (ws relay, TURN, direct) between real machines: join or host a room, ping the host at 30 Hz, force a path or a failover, print one JSON result."
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone: cargo build --release (see README.md, and scripts/relay-world/ for the Fly run).
+[workspace]
+
+[dependencies]
+partii-net = { path = "../../crates/partii-net" }
+serde_json = "1"
+
+[profile.release]
+debug = false

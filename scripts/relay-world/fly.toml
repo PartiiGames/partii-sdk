@@ -1,0 +1,7 @@
+# The relay-world probe app: machines only (no services, no public IPs).
+# Machines are created and destroyed by scripts/relay-world/run.sh.
+app = "partii-relay-test"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"

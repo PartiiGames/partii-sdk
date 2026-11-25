@@ -107,6 +107,10 @@ pub struct Config {
     /// [`Event::MemberResumed`], and [`Core::away`] / [`Core::back`] work
     /// (off, they answer `Failed { code: "not_enabled" }` and send nothing).
     pub away: bool,
+    /// Only these paths may carry play (empty: all). For probes and tests
+    /// that measure one path on its own (`[Turn]`: relay only, no ws
+    /// fallback). Games leave it empty.
+    pub paths: Vec<PathId>,
 }
 
 pub use partii_protocol::room::{Away, AuthErrorCode, IceServer, Member, Room, AWAY_CAP};
@@ -301,6 +305,9 @@ struct Pc {
     gen: u32,
     phase: PcPhase,
     failures: usize,
+    /// What the driver reported about the open connection (the selected ICE
+    /// candidate pair), for `stats`.
+    info: Option<Value>,
 }
 
 struct Peer {
@@ -368,6 +375,8 @@ pub struct Core {
     /// Tokens of `auth` requests in flight, by request id: on `ok` the
     /// request's token becomes `cfg.player_token` (what later hellos send).
     auths: BTreeMap<u32, Option<String>>,
+    /// Paths silently dropped both ways (`blackhole`, for failover tests).
+    blackholed: [bool; 3],
 }
 
 impl Core {
@@ -396,7 +405,21 @@ impl Core {
             refused: BTreeSet::new(),
             clock: 0.0,
             auths: BTreeMap::new(),
+            blackholed: [false; 3],
         }
+    }
+
+    /// May path `p` carry play (`Config::paths`, `Config::no_webrtc`)?
+    fn allowed(&self, p: PathId) -> bool {
+        (self.cfg.paths.is_empty() || self.cfg.paths.contains(&p))
+            && !(self.cfg.no_webrtc && p != PathId::Ws)
+    }
+
+    /// Test hook: silently drop every datagram on path `p`, both ways, while
+    /// `on` (the path stays "open", as a dead network path does). Links
+    /// notice by their pings and fail over; `on: false` restores it.
+    pub fn blackhole(&mut self, p: PathId, on: bool) {
+        self.blackholed[p as usize] = on;
     }
 
     /// The topology this engine follows in its room ([`Topology`]).
@@ -436,7 +459,8 @@ impl Core {
                     .iter()
                     .map(|id| {
                         let s = p.link.path(*id);
-                        (id.name().to_string(), json!({"open": s.open, "rtt": s.rtt, "pings": s.pings, "pongs": s.pongs}))
+                        let ice = p.pcs.get(id).and_then(|pc| pc.info.clone());
+                        (id.name().to_string(), json!({"open": s.open, "rtt": s.rtt, "pings": s.pings, "pongs": s.pongs, "ice": ice}))
                     })
                     .collect();
                 (mid.to_string(), json!({"current": p.link.current(), "retransmits": p.link.retransmits(), "paths": paths}))
@@ -942,6 +966,9 @@ impl Core {
         if b.len() < 3 || (b[0] != RELAY_FRAME && b[0] != RELAY_BUNDLE) {
             return;
         }
+        if self.blackholed[PathId::Ws as usize] {
+            return;
+        }
         let from = u16::from_be_bytes([b[1], b[2]]);
         let datagrams: Vec<&[u8]> = if b[0] == RELAY_FRAME {
             vec![&b[3..]]
@@ -1020,7 +1047,20 @@ impl Core {
         self.flush_link(mid, now);
     }
 
+    /// The driver's report on an open peer connection (selected candidate
+    /// pair and the like), shown in `stats`.
+    pub fn on_pc_info(&mut self, mid: u16, path: PathId, gen: u32, info: Value) {
+        if let Some(pc) = self.peers.get_mut(&mid).and_then(|p| p.pcs.get_mut(&path)) {
+            if pc.gen == gen {
+                pc.info = Some(info);
+            }
+        }
+    }
+
     pub fn on_pc_data(&mut self, mid: u16, path: PathId, bytes: &[u8], now: f64) {
+        if self.blackholed[path as usize] {
+            return;
+        }
         if let Some(p) = self.peers.get_mut(&mid) {
             p.link.on_datagram(path, bytes, now);
         }
@@ -1205,6 +1245,7 @@ impl Core {
         }
         self.announce(mid);
         let mut link = Link::default();
+        link.restrict(&self.cfg.paths, now);
         link.set_open(PathId::Ws, self.online(), now);
         self.peers.insert(
             mid,
@@ -1222,6 +1263,7 @@ impl Core {
                         gen: 0,
                         phase: PcPhase::Waiting { retry_at: now },
                         failures: 0,
+                        info: None,
                     },
                 );
             }
@@ -1231,11 +1273,12 @@ impl Core {
 
     fn webrtc_paths(&self) -> Vec<PathId> {
         // No relay credentials: only a direct attempt (host/STUN candidates).
-        if self.relay == "turn" {
+        let all = if self.relay == "turn" {
             vec![PathId::Turn, PathId::Direct]
         } else {
             vec![PathId::Direct]
-        }
+        };
+        all.into_iter().filter(|p| self.allowed(*p)).collect()
     }
 
     fn drop_peer(&mut self, mid: u16) {
@@ -1349,9 +1392,11 @@ impl Core {
             gen: 0,
             phase: PcPhase::Waiting { retry_at: now },
             failures: 0,
+            info: None,
         });
         pc.gen = gen.unwrap_or(pc.gen + 1);
         pc.phase = PcPhase::Connecting { since: now };
+        pc.info = None;
         let g = pc.gen;
         self.out.push_back(Action::ClosePc { mid, path });
         self.out.push_back(Action::CreatePc {
@@ -1388,7 +1433,7 @@ impl Core {
                 return;
             }
         }
-        if self.cfg.no_webrtc {
+        if self.cfg.no_webrtc || !self.allowed(path) {
             return;
         }
         if data["type"] == "restart" {
@@ -1582,7 +1627,11 @@ impl Core {
             );
         }
         let mut ws: Vec<Vec<u8>> = Vec::new();
+        let holes = self.blackholed;
         for (path, d) in datagrams {
+            if holes[path as usize] {
+                continue;
+            }
             match path {
                 PathId::Ws => ws.push(d),
                 _ => self.out.push_back(Action::PcSend {

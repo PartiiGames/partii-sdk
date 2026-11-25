@@ -9,6 +9,7 @@ fn core(no_webrtc: bool) -> Core {
         player_token: None,
         no_webrtc,
         away: false,
+        paths: vec![],
     })
 }
 
@@ -1625,5 +1626,121 @@ fn auth_events_serialize_for_the_web() {
         })
         .unwrap(),
         json!({"ev": "auth_failed", "req": 7, "code": "rate_limited", "message": "busy", "retry_after_ms": 500})
+    );
+}
+
+#[test]
+fn restricted_paths_only_build_and_use_what_they_allow() {
+    // A probe forcing TURN: no direct pc, no answer to a direct offer, and
+    // nothing goes out on (or comes in from) the ws relay.
+    let mut c = core(false);
+    c.cfg.paths = vec![PathId::Turn];
+    online(&mut c, "turn");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(1, &[1, 3])}).to_string(),
+        0.0,
+    );
+    c.tick(1.0);
+    let paths: Vec<PathId> = c
+        .drain()
+        .into_iter()
+        .filter_map(|a| match a {
+            Action::CreatePc { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, vec![PathId::Turn]);
+    c.send(3, true, b"x", 2.0);
+    assert!(
+        !c.drain().iter().any(|a| matches!(a, Action::SendBinary(_))),
+        "nothing on the ws relay"
+    );
+    assert!(!c.link(3).unwrap().path(PathId::Ws).open);
+    c.on_binary(
+        &[RELAY_FRAME, 0, 3, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        3.0,
+    );
+    assert!(!c.link(3).unwrap().path(PathId::Ws).open, "ws stays shut");
+
+    let mut d = core(false);
+    d.cfg.paths = vec![PathId::Turn];
+    online(&mut d, "turn");
+    let id = d.join("ABCDE", "game", "", Value::Null);
+    d.drain();
+    d.on_text(
+        &json!({"t": "ok", "id": id, "room": room(2, &[1, 2])}).to_string(),
+        0.0,
+    );
+    d.drain();
+    d.on_text(&json!({"t": "signal", "from": 1, "data": {"pc": "direct", "gen": 1, "type": "offer", "sdp": "x"}}).to_string(), 1.0);
+    assert!(!d
+        .drain()
+        .iter()
+        .any(|a| matches!(a, Action::CreatePc { .. } | Action::PcSignal { .. })));
+}
+
+#[test]
+fn a_blackholed_path_drops_both_ways_then_recovers() {
+    let mut a = core(true);
+    online(&mut a, "ws");
+    let id = a.join("ABCDE", "game", "", Value::Null);
+    a.drain();
+    a.on_text(
+        &json!({"t": "ok", "id": id, "room": room(1, &[1, 2])}).to_string(),
+        0.0,
+    );
+    a.drain();
+    a.blackhole(PathId::Ws, true);
+    a.send(2, false, b"lost", 1.0);
+    assert!(!a.drain().iter().any(|x| matches!(x, Action::SendBinary(_))));
+    let mut f = vec![RELAY_FRAME, 0, 2, 0x20];
+    f.extend_from_slice(b"in");
+    a.on_binary(&f, 2.0);
+    assert!(!events(&a.drain())
+        .iter()
+        .any(|e| matches!(e, Event::Message { .. })));
+    a.blackhole(PathId::Ws, false);
+    a.send(2, false, b"back", 3.0);
+    assert!(a
+        .drain()
+        .iter()
+        .any(|x| matches!(x, Action::SendBinary(b) if b.ends_with(b"back"))));
+    a.on_binary(&f, 4.0);
+    assert!(events(&a.drain())
+        .iter()
+        .any(|e| matches!(e, Event::Message { bytes, .. } if bytes == b"in")));
+}
+
+#[test]
+fn stats_carry_the_drivers_ice_report() {
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(1, &[1, 3])}).to_string(),
+        0.0,
+    );
+    c.tick(1.0);
+    let gen = c
+        .drain()
+        .into_iter()
+        .find_map(|a| match a {
+            Action::CreatePc {
+                path: PathId::Turn,
+                gen,
+                ..
+            } => Some(gen),
+            _ => None,
+        })
+        .unwrap();
+    c.on_pc_info(3, PathId::Turn, gen + 1, json!({"local": "stale"}));
+    assert!(c.stats()["peers"]["3"]["paths"]["turn"]["ice"].is_null());
+    c.on_pc_info(3, PathId::Turn, gen, json!({"local": "relay"}));
+    assert_eq!(
+        c.stats()["peers"]["3"]["paths"]["turn"]["ice"]["local"],
+        "relay"
     );
 }

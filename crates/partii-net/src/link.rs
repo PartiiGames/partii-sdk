@@ -104,6 +104,9 @@ pub struct Link {
     events: VecDeque<LinkEvent>,
     /// Ever had a usable path (the peer counts as connected from then on).
     pub connected_at: Option<f64>,
+    /// Paths this link may use (`Config::paths`); a path left out never
+    /// opens and its datagrams are ignored.
+    allowed: [bool; 3],
 }
 
 impl Default for Link {
@@ -118,6 +121,7 @@ impl Default for Link {
             unrel: VecDeque::new(),
             events: VecDeque::new(),
             connected_at: None,
+            allowed: [true; 3],
         }
     }
 }
@@ -148,7 +152,25 @@ impl Link {
         self.tx.in_flight()
     }
 
+    /// Use only these paths (an empty list allows all). For probes and
+    /// tests that measure one path on its own.
+    pub fn restrict(&mut self, only: &[PathId], now: f64) {
+        for p in PathId::ALL {
+            let ok = only.is_empty() || only.contains(&p);
+            if !ok {
+                self.set_open(p, false, now);
+            }
+            self.allowed[p as usize] = ok;
+        }
+    }
+    pub fn allows(&self, p: PathId) -> bool {
+        self.allowed[p as usize]
+    }
+
     pub fn set_open(&mut self, p: PathId, open: bool, now: f64) {
+        if open && !self.allowed[p as usize] {
+            return;
+        }
         let s = self.path_mut(p);
         if s.open == open {
             return;
@@ -178,6 +200,9 @@ impl Link {
 
     /// Take one datagram that arrived on path `p`.
     pub fn on_datagram(&mut self, p: PathId, d: &[u8], now: f64) {
+        if !self.allowed[p as usize] {
+            return;
+        }
         let Some((&kind, body)) = d.split_first() else {
             return;
         };

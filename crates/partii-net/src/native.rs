@@ -19,7 +19,8 @@ use webrtc::data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
     RTCIceCandidateInit, RTCIceServer, RTCIceTransportPolicy, RTCPeerConnectionIceEvent,
-    RTCPeerConnectionState, RTCSessionDescription, SettingEngineBuilder,
+    RTCPeerConnectionState, RTCSessionDescription, RTCStatsReport, RTCStatsReportEntry,
+    SettingEngineBuilder, StatsSelector,
 };
 
 enum Cmd {
@@ -54,6 +55,7 @@ enum Cmd {
     },
     Report(Value),
     Stats(async_channel::Sender<Value>),
+    Blackhole(PathId, bool),
     Away(async_channel::Sender<u32>),
     Back(async_channel::Sender<u32>),
     Auth {
@@ -88,6 +90,12 @@ enum Io {
         mid: u16,
         path: PathId,
         bytes: Vec<u8>,
+    },
+    PcInfo {
+        mid: u16,
+        path: PathId,
+        gen: u32,
+        info: Value,
     },
 }
 
@@ -270,6 +278,12 @@ impl Engine {
     pub fn report(&self, metrics: Value) {
         let _ = self.cmd.try_send(Cmd::Report(metrics));
     }
+    /// Test hook (probes, failover drills): silently drop every datagram on
+    /// `path`, both ways, until called again with `on: false`. See
+    /// `core::Core::blackhole`.
+    pub fn blackhole(&self, path: PathId, on: bool) {
+        let _ = self.cmd.try_send(Cmd::Blackhole(path, on));
+    }
     /// Link state per member (path in use, RTT per path).
     pub fn stats(&self) -> Value {
         let (tx, rx) = async_channel::bounded(1);
@@ -357,6 +371,7 @@ async fn actor(
                 }
                 Ok(Cmd::Report(m)) => core.report(m),
                 Ok(Cmd::Stats(reply)) => { let _ = reply.try_send(core.stats()); }
+                Ok(Cmd::Blackhole(p, on)) => core.blackhole(p, on),
                 Ok(Cmd::Shutdown) | Err(_) => {
                     if core.room().is_none() || sock_out.is_none() {
                         break;
@@ -385,6 +400,7 @@ async fn actor(
                     Io::PcOpen { mid, path, gen } => core.on_pc_open(mid, path, gen, t),
                     Io::PcClosed { mid, path, gen } => core.on_pc_closed(mid, path, gen, t),
                     Io::PcData { mid, path, bytes } => core.on_pc_data(mid, path, &bytes, t),
+                    Io::PcInfo { mid, path, gen, info } => core.on_pc_info(mid, path, gen, info),
                     _ => {}
                 }
             }
@@ -529,6 +545,7 @@ fn apply_other(core: &mut Core, c: Cmd) -> bool {
         Cmd::Stats(reply) => {
             let _ = reply.try_send(core.stats());
         }
+        Cmd::Blackhole(p, on) => core.blackhole(p, on),
         Cmd::Send { .. } => {}
         Cmd::Shutdown => return false,
     }
@@ -770,6 +787,7 @@ async fn peer(
                     if !open {
                         open = true;
                         let _ = io.try_send(Io::PcOpen { mid, path, gen });
+                        report_ice(&pc, mid, path, gen, &io).await;
                     }
                 }
                 Err(_) => break,
@@ -779,6 +797,7 @@ async fn peer(
                     if !open {
                         open = true;
                         let _ = io.try_send(Io::PcOpen { mid, path, gen });
+                        report_ice(&pc, mid, path, gen, &io).await;
                     }
                 }
                 Ok(Some(DataChannelEvent::OnMessage(m))) => {
@@ -796,4 +815,63 @@ async fn peer(
     }
     let _ = pc.close().await;
     closed(&io);
+}
+
+/// Tell the core which candidate pair an open connection selected (types,
+/// protocols, the TURN server's transport) so `stats` can show it.
+async fn report_ice<P: PeerConnection + ?Sized>(
+    pc: &P,
+    mid: u16,
+    path: PathId,
+    gen: u32,
+    io: &async_channel::Sender<Io>,
+) {
+    let report = pc.get_stats(Instant::now(), StatsSelector::None).await;
+    let _ = io.try_send(Io::PcInfo {
+        mid,
+        path,
+        gen,
+        info: selected_pair(&report),
+    });
+}
+
+fn selected_pair(report: &RTCStatsReport) -> Value {
+    let selected: Option<String> = report.iter().find_map(|e| match e {
+        RTCStatsReportEntry::Transport(t) if !t.selected_candidate_pair_id.is_empty() => {
+            Some(t.selected_candidate_pair_id.clone())
+        }
+        _ => None,
+    });
+    let pair = report.iter().find_map(|e| match e {
+        RTCStatsReportEntry::IceCandidatePair(p)
+            if selected
+                .as_deref()
+                .map_or(p.nominated, |id| p.stats.id == id) =>
+        {
+            Some(p)
+        }
+        _ => None,
+    });
+    let Some(pair) = pair else {
+        return json!({"selected": null});
+    };
+    let cand = |id: &str| -> Value {
+        report
+            .get(id)
+            .and_then(|e| match e {
+                RTCStatsReportEntry::LocalCandidate(c) | RTCStatsReportEntry::RemoteCandidate(c) => Some(json!({
+                    "type": serde_json::to_value(&c.candidate_type).unwrap_or(Value::Null),
+                    "protocol": c.protocol,
+                    "relay_protocol": serde_json::to_value(&c.relay_protocol).unwrap_or(Value::Null),
+                    "url": c.url,
+                })),
+                _ => None,
+            })
+            .unwrap_or(Value::Null)
+    };
+    json!({
+        "selected": true,
+        "local": cand(&pair.local_candidate_id),
+        "remote": cand(&pair.remote_candidate_id),
+    })
 }
