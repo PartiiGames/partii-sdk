@@ -1,8 +1,23 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-30)
 
 Every SDK crate moves to 0.2.0 (one workspace version). Minor bump: new public fields and enum variants.
+
+- `partii-net`: **faster failover that does not flap** (tested from 9 Fly regions against staging, and in simulation with 300-600 ms stalls every 3-5 s plus 2% loss). Timings:
+  - **Suspect window 400 ms to 1.1 s, learned per path.** A WebRTC path quiet that long hands play to a stand-in (the best other path still answering, else the ws relay) until it answers again. A steady path stays at 400 ms; one that stalls now and then waits its recent worst gap between pongs plus 250 ms. Clean-path failover: play resumed in 422-690 ms on Fly.
+  - **Dead window 1 to 2.5 s (at least 2 missed pongs).** Past it, play switches off the path for good: 1 s on a steady path, else its learned worst gap plus two pings.
+  - **Promote hold 1.5 s, doubling up to 2 min.** Play goes back to a path that died only after it has answered for 1.5 s. Each further death within 3 min doubles the probation (10 s, 20 s... up to 2 min), and any other healthy path is preferred meanwhile.
+  - **3 s settle after a stall.** Play does not leave a path that just stalled because another scores better for a moment.
+  - **pc open timeout 7 s** (was 4 s), so TURN over TLS has time to open.
+  - **Rebuild a path that died every 1 s for 60 s, with a 4.5 s open timeout**, so play is back on WebRTC within ~7.5 s of the network returning (was up to ~29 s).
+  - Reliable messages stay complete and in order through every switch (ARQ), on native and web (same `Link`).
+  - Jitter (450 ms stalls, ~570 ms as measured, every 3-5 s): 0-0.86 switches/min on Fly where it was 5.6-19.
+  - New in `stats()` per peer: `detours`, `detour_ms`, `suspect_after_ms`.
+- `partii-net`: **TURN over TLS 443 for native clients.** A `turns:` server is reached through a local TLS bridge (webrtc-rs speaks only UDP to TURN), so native games open the TURN path on networks that block UDP (7 of 8 regions with UDP dropped, at TURN speed). Browsers already did this themselves.
+- `partii-net`: **Nagle off** on the session socket (native): ws relay RTTs drop by up to ~200 ms (iad-fra p50 348 to 132 ms).
+- `partii-net`: **join retry.** A join the edge answers with `internal` (a Durable Object call lost in transit) or `unavailable` is sent again with the same id, 250 ms then 500 ms later, before the game hears `Failed`. The edge's join is idempotent per connection, so a join that did land returns the same seat (no second seat, no second `member_joined`). Real refusals (`not_found`, `full`, `version_mismatch`...) go straight to the game; `leave()` or a dropped socket cancels pending retries.
+- `partii-rtc`: candidate-pair stats name their candidates with the ids the candidate stats use, so the selected pair's local and remote candidates resolve.
 
 - `partii-net`: the **away grace** (PROTOCOL.md "Away"), **opt-in**: `Config { away: true, .. }` (JSON `"away": true` for `WebEngine`). Off by default, so a game that only bumps the SDK sees exactly what it saw before (hello `caps: ["reset"]`, the 20 s grace, `MemberSuspended` / `MemberResumed`). Opted in (hello `caps: ["reset", "away"]`), a dropped socket (a phone frozen in the background) keeps its seat for the room's `away_grace_ms` (default 30 s, 5 s to 5 min) instead of the 20 s socket grace, and comes back into the same seat on the same `conn`.
   - New events `MemberAway { mid, reason: "hint" | "dropped", until, grace_ms }` and `MemberBack { mid }` (a `reset` back restarts the reliable link, as `member_resumed {reset}` did). Opted-in engines get these **instead of** `MemberSuspended` / `MemberResumed`; those still arrive from an edge or room that sends the old frames. The ws path to an away member closes (the edge drops packets to it; reliable sends wait and go out when it's back) and its WebRTC paths restart on `MemberBack`.
