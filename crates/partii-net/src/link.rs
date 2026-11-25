@@ -81,6 +81,11 @@ pub const DEAD_MAX_MS: f64 = 2500.0;
 /// `REPROMOTE_HOLD_MS`, so a path that keeps dying does not flap.
 pub const REPROMOTE_WINDOW_MS: f64 = 10_000.0;
 pub const REPROMOTE_HOLD_MS: f64 = 1500.0;
+/// After a stall (a pong gap past `SUSPECT_MS`) a path's RTT runs high for
+/// a while (queues drain, SCTP backs off), so for `SETTLE_MS` play does not
+/// leave it just because another path scores better: that swapped turn and
+/// direct after every stall on the Fly jitter run.
+pub const SETTLE_MS: f64 = 3000.0;
 
 const PING: u8 = 0x10;
 const PONG: u8 = 0x11;
@@ -100,6 +105,8 @@ pub struct PathState {
     pub pongs: u64,
     /// The longest recent gap between pongs (ms), decaying (`GAP_PEAK_DECAY`).
     pub gap_peak: f64,
+    /// When the last pong gap past `SUSPECT_MS` ended.
+    pub stalled_at: Option<f64>,
 }
 
 impl PathState {
@@ -277,6 +284,9 @@ impl Link {
                 s.pongs += 1;
                 if let Some(prev) = s.last_pong {
                     s.gap_peak = (now - prev).max(s.gap_peak * GAP_PEAK_DECAY);
+                    if now - prev > SUSPECT_MS {
+                        s.stalled_at = Some(now);
+                    }
                 }
                 s.last_pong = Some(now);
                 s.rtt = Some(match s.rtt {
@@ -489,6 +499,17 @@ impl Link {
             self.candidate = None;
             return;
         };
+        // (Not the ws relay: it is the last rung, and idle it is pinged
+        // only every WS_IDLE_PING_MS, so its gaps say nothing.)
+        if cur != PathId::Ws
+            && self
+                .path(cur)
+                .stalled_at
+                .is_some_and(|t| now - t < SETTLE_MS)
+        {
+            self.candidate = None;
+            return;
+        }
         let (rb, rc) = (score(b).unwrap_or(f64::MAX), score(cur));
         let better = match rc {
             // Current not measured yet (fresh ws): any measured path is better.
@@ -869,9 +890,13 @@ mod tests {
     /// Fly jitter run does. Prints detours and switches per minute.
     #[test]
     fn jitter_sweep_stays_under_one_switch_a_minute() {
-        for (world, delay, drop) in [
-            ("hold, 40 ms", [60.0, 30.0, 20.0], false),
-            ("drop, 180 ms", [100.0, 90.0, 90.0], true),
+        // (world, one-way delays, stalls drop, stalls hit turn too, turn open)
+        for (world, delay, drop, both, turn) in [
+            ("hold, 40 ms", [60.0, 30.0, 20.0], false, false, false),
+            ("drop, 180 ms", [100.0, 90.0, 90.0], true, true, true),
+            // turn over TLS (TCP) rides out UDP stalls: direct's RTT
+            // spikes after each one while turn's stays put.
+            ("hold, turn steady", [60.0, 45.0, 40.0], false, false, true),
         ] {
             for stall in [300.0, 450.0, 600.0] {
                 let (mut detours, mut switches) = (0u32, 0usize);
@@ -880,14 +905,14 @@ mod tests {
                     s.rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
                     s.stall_drop = drop;
                     s.open(PathId::Ws, true);
-                    if drop {
+                    if turn {
                         s.open(PathId::Turn, true);
                     }
                     s.open(PathId::Direct, true);
                     s.step(3000.0);
                     let t0 = s.now;
                     let mut t = t0 + 1000.0;
-                    let udp = if drop {
+                    let udp = if both {
                         vec![PathId::Turn, PathId::Direct]
                     } else {
                         vec![PathId::Direct]
