@@ -10,6 +10,7 @@ pub mod core;
 pub mod link;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 pub mod native;
+pub mod netstats;
 pub use core::{AuthErrorCode, Config, Event, Member, Room, Topology, BROADCAST, TOPOLOGY_WAIT_MS};
 pub use link::PathId;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]

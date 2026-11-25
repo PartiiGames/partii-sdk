@@ -9,6 +9,7 @@ fn core(no_webrtc: bool) -> Core {
         player_token: None,
         no_webrtc,
         away: false,
+        no_net_stats: false,
     })
 }
 
@@ -712,7 +713,7 @@ fn hello_says_fresh_only_before_the_first_welcome() {
     c.on_socket_open(0.0);
     let h = texts(&c.drain());
     assert_eq!(h[0]["fresh"], true);
-    assert_eq!(h[0]["caps"], json!(["reset"]), "the away grace is opt-in");
+    assert_eq!(h[0]["caps"], json!(["reset", "net_stats"]), "the away grace is opt-in");
     c.on_text(
         r#"{"t":"welcome","resumed":false,"relay":"ws","ice_servers":[]}"#,
         1.0,
@@ -775,7 +776,7 @@ fn hello_opts_in_to_away_only_when_asked() {
     c.cfg.away = true;
     c.tick(0.0);
     c.on_socket_open(0.0);
-    assert_eq!(texts(&c.drain())[0]["caps"], json!(["reset", "away"]));
+    assert_eq!(texts(&c.drain())[0]["caps"], json!(["reset", "away", "net_stats"]));
     // The web engine's JSON config may leave every optional field out; away is off then.
     let cfg: Config = serde_json::from_str(r#"{"edge":"https://e","key":"pk"}"#).unwrap();
     assert!(!cfg.away && !cfg.no_webrtc && cfg.conn.is_empty());
@@ -1626,4 +1627,203 @@ fn auth_events_serialize_for_the_web() {
         .unwrap(),
         json!({"ev": "auth_failed", "req": 7, "code": "rate_limited", "message": "busy", "retry_after_ms": 500})
     );
+}
+
+// ── Network stats (netstats.rs) ──
+
+/// A member (mid 2) of host 1's room, online on an edge that asks for net stats every `every` ms.
+fn member_with_stats(every: Option<u64>) -> Core {
+    let mut c = core(false);
+    c.tick(0.0);
+    c.on_socket_open(0.0);
+    let mut w = json!({"t": "welcome", "resumed": false, "relay": "turn", "ice_servers": [{"urls": ["stun:s:3478", "turn:t:3478"], "username": "u", "credential": "p"}]});
+    if let Some(ms) = every {
+        w["net_stats_ms"] = json!(ms);
+    }
+    c.on_text(&w.to_string(), 0.0);
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(2, &[1, 2])}).to_string(),
+        0.0,
+    );
+    c.drain();
+    c
+}
+
+fn net_stats(actions: &[Action]) -> Vec<Value> {
+    texts(actions)
+        .into_iter()
+        .filter(|t| t["t"] == "net_stats")
+        .collect()
+}
+
+/// Tick (keeping the socket alive) up to `to` ms, returning every action.
+fn run(c: &mut Core, from: f64, to: f64) -> Vec<Action> {
+    let mut out = Vec::new();
+    let mut t = from;
+    while t < to {
+        t += 100.0;
+        c.on_text("pong", t);
+        c.tick(t);
+        out.extend(c.drain());
+    }
+    out
+}
+
+#[test]
+fn net_stats_report_every_interval_with_the_links_paths() {
+    let mut c = member_with_stats(Some(30_000));
+    let mut acts = run(&mut c, 0.0, 1_000.0);
+    // The direct path opens at 1 s and its candidates are read; the turn path times out.
+    let gen = |acts: &[Action], path: PathId| {
+        acts.iter()
+            .filter_map(|a| match a {
+                Action::CreatePc {
+                    mid: 1,
+                    path: p,
+                    gen,
+                    ..
+                } if *p == path => Some(*gen),
+                _ => None,
+            })
+            .last()
+    };
+    // mid 2 answers: the host (1) offers. Hand it offers for both paths.
+    for pc in ["turn", "direct"] {
+        let sig = json!({"t": "signal", "from": 1, "data": {"pc": pc, "gen": 1, "type": "offer", "sdp": "x"}});
+        c.on_text(&sig.to_string(), 1_000.0);
+    }
+    acts.extend(c.drain());
+    let g_direct = gen(&acts, PathId::Direct).expect("direct pc");
+    c.on_pc_open(1, PathId::Direct, g_direct, 1_000.0);
+    c.on_pc_candidates(1, PathId::Direct, g_direct, "srflx", "host");
+    c.on_pc_candidates(1, PathId::Direct, g_direct, "bogus", "host");
+    let acts = run(&mut c, 1_000.0, 29_000.0);
+    assert!(net_stats(&acts).is_empty(), "nothing before the interval");
+    let acts = run(&mut c, 29_000.0, 31_000.0);
+    let r = net_stats(&acts);
+    assert_eq!(r.len(), 1, "one report");
+    assert_eq!(r[0]["v"], 1);
+    assert_eq!(r[0]["final"], false);
+    let links = r[0]["links"].as_array().unwrap();
+    assert_eq!(links.len(), 1);
+    let l = &links[0];
+    assert_eq!(l["mid"], 1);
+    assert_eq!(l["new"], true);
+    assert_eq!(l["paths"]["direct"]["opened_ms"], 1000);
+    assert_eq!(l["paths"]["direct"]["cand"], json!(["srflx", "host"]));
+    assert_eq!(l["paths"]["direct"]["open"], true);
+    assert_eq!(l["paths"]["ws"]["opened_ms"], 0);
+    assert_eq!(l["paths"]["turn"]["fails"], 1, "turn timed out at 12 s");
+    let on: u64 = l["on_ms"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_u64().unwrap())
+        .sum();
+    assert!(
+        (29_000..=31_000).contains(&on),
+        "time on paths adds up to the interval: {on}"
+    );
+    // No addresses, no player ids: only these keys.
+    let text = r[0].to_string();
+    assert!(
+        !text.contains("stun:") && !text.contains("player"),
+        "{text}"
+    );
+    // The next one is 30 s later, without the once-only facts.
+    let acts = run(&mut c, 31_000.0, 61_000.0);
+    let r2 = net_stats(&acts);
+    assert_eq!(r2.len(), 1);
+    let l2 = &r2[0]["links"][0];
+    assert!(l2.get("new").is_none());
+    assert!(l2["paths"]["direct"].get("opened_ms").is_none());
+    assert!(l2["paths"]["direct"].get("cand").is_none());
+}
+
+#[test]
+fn net_stats_final_report_comes_before_leave() {
+    let mut c = member_with_stats(Some(30_000));
+    run(&mut c, 0.0, 5_000.0);
+    c.leave();
+    let sent = texts(&c.drain());
+    let kinds: Vec<&str> = sent.iter().map(|t| t["t"].as_str().unwrap()).collect();
+    assert_eq!(kinds, vec!["net_stats", "leave"]);
+    assert_eq!(sent[0]["final"], true);
+    assert_eq!(sent[0]["links"][0]["mid"], 1);
+}
+
+#[test]
+fn net_stats_only_when_the_edge_asks_and_only_from_one_end() {
+    // An older edge: no net_stats_ms in its welcome, no report ever.
+    let mut c = member_with_stats(None);
+    assert!(net_stats(&run(&mut c, 0.0, 70_000.0)).is_empty());
+    c.leave();
+    assert!(net_stats(&c.drain()).is_empty());
+    // Opted out: none either, and the hello doesn't ask.
+    let mut c = core(true);
+    c.cfg.no_net_stats = true;
+    c.tick(0.0);
+    c.on_socket_open(0.0);
+    assert_eq!(texts(&c.drain())[0]["caps"], json!(["reset"]));
+    c.on_text(
+        r#"{"t":"welcome","resumed":false,"relay":"ws","ice_servers":[],"net_stats_ms":30000}"#,
+        0.0,
+    );
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.on_text(
+        &json!({"t": "ok", "id": id, "room": room(2, &[1, 2])}).to_string(),
+        0.0,
+    );
+    assert!(net_stats(&run(&mut c, 0.0, 40_000.0)).is_empty());
+    // The host reports nothing (its members do).
+    let mut h = core(true);
+    h.tick(0.0);
+    h.on_socket_open(0.0);
+    h.on_text(
+        r#"{"t":"welcome","resumed":false,"relay":"ws","ice_servers":[],"net_stats_ms":30000}"#,
+        0.0,
+    );
+    let id = h.create("g", Some(4), "game", "H", Value::Null);
+    h.on_text(
+        &json!({"t": "ok", "id": id, "room": room(1, &[1])}).to_string(),
+        0.0,
+    );
+    h.on_text(
+        &json!({"t": "member_joined", "member": member_json(2)}).to_string(),
+        0.0,
+    );
+    assert!(h.link(2).is_some());
+    assert!(net_stats(&run(&mut h, 0.0, 40_000.0)).is_empty());
+}
+
+#[test]
+fn net_stats_a_link_that_ends_goes_in_the_next_report() {
+    let mut c = core(true);
+    c.tick(0.0);
+    c.on_socket_open(0.0);
+    c.on_text(
+        r#"{"t":"welcome","resumed":false,"relay":"ws","ice_servers":[],"net_stats_ms":30000}"#,
+        0.0,
+    );
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    let mut r = room(2, &[1, 2, 3]);
+    r["topology"] = json!("mesh");
+    c.on_text(&json!({"t": "ok", "id": id, "room": r}).to_string(), 0.0);
+    run(&mut c, 0.0, 10_000.0);
+    assert!(c.link(3).is_some());
+    c.on_text(r#"{"t":"member_left","mid":3,"reason":"left"}"#, 10_000.0);
+    let acts = run(&mut c, 10_000.0, 31_000.0);
+    let rep = net_stats(&acts);
+    assert_eq!(rep.len(), 1);
+    let links = rep[0]["links"].as_array().unwrap();
+    let ended: Vec<&Value> = links.iter().filter(|l| l["ended"] == true).collect();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0]["mid"], 3, "2 < 3: mid 2 reports that mesh link");
+    assert!(links
+        .iter()
+        .any(|l| l["mid"] == 1 && l.get("ended").is_none()));
+    // ws only: stuck on ws isn't said for an engine that never tries WebRTC.
+    assert!(links.iter().all(|l| l.get("stuck_ws").is_none()));
 }

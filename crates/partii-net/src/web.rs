@@ -198,6 +198,7 @@ fn wire_channel(sh: &Shared, mid: u16, path: PathId, gen: u32, dc: &RtcDataChann
         let f = Closure::<dyn FnMut()>::new(move || {
             s.borrow_mut().core.on_pc_open(mid, path, gen, now());
             perform(&s);
+            read_candidates(&s, mid, path, gen);
         });
         dc.set_onopen(Some(f.as_ref().unchecked_ref()));
         f.forget();
@@ -224,6 +225,68 @@ fn wire_channel(sh: &Shared, mid: u16, path: PathId, gen: u32, dc: &RtcDataChann
         dc.set_onclose(Some(f.as_ref().unchecked_ref()));
         f.forget();
     }
+}
+
+/// The selected ICE candidate pair's local and remote types, from an
+/// RTCStatsReport: the transport's `selectedCandidatePairId`, else a
+/// `selected` (Firefox) or nominated, succeeded candidate pair.
+fn selected_types(report: &JsValue) -> Option<(String, String)> {
+    let map: &js_sys::Map = report.unchecked_ref();
+    let mut by_id: HashMap<String, JsValue> = HashMap::new();
+    map.for_each(&mut |v, k| {
+        if let Some(k) = k.as_string() {
+            by_id.insert(k, v);
+        }
+    });
+    let get = |o: &JsValue, k: &str| Reflect::get(o, &JsValue::from_str(k)).ok();
+    let text = |o: &JsValue, k: &str| get(o, k).and_then(|v| v.as_string());
+    let pair = by_id
+        .values()
+        .filter(|v| text(v, "type").as_deref() == Some("transport"))
+        .find_map(|t| text(t, "selectedCandidatePairId"))
+        .and_then(|id| by_id.get(&id).cloned())
+        .or_else(|| {
+            by_id
+                .values()
+                .find(|v| {
+                    text(v, "type").as_deref() == Some("candidate-pair")
+                        && (get(v, "selected").and_then(|b| b.as_bool()) == Some(true)
+                            || (get(v, "nominated").and_then(|b| b.as_bool()) == Some(true)
+                                && text(v, "state").as_deref() == Some("succeeded")))
+                })
+                .cloned()
+        })?;
+    let kind = |id_key: &str| {
+        text(&pair, id_key)
+            .and_then(|id| by_id.get(&id).cloned())
+            .and_then(|c| text(&c, "candidateType"))
+    };
+    Some((kind("localCandidateId")?, kind("remoteCandidateId")?))
+}
+
+/// Read which candidate types path `path` of `mid` settled on (for the
+/// network stats; only the types, never an address).
+fn read_candidates(sh: &Shared, mid: u16, path: PathId, gen: u32) {
+    let Some(pc) = sh
+        .borrow()
+        .pcs
+        .get(&(mid, path))
+        .filter(|p| p.gen == gen)
+        .map(|p| p.pc.clone())
+    else {
+        return;
+    };
+    let s = sh.clone();
+    spawn_local(async move {
+        let Ok(report) = JsFuture::from(pc.get_stats()).await else {
+            return;
+        };
+        if let Some((local, remote)) = selected_types(&report) {
+            s.borrow_mut()
+                .core
+                .on_pc_candidates(mid, path, gen, &local, &remote);
+        }
+    });
 }
 
 fn create_pc(
@@ -290,6 +353,7 @@ fn create_pc(
             if ch.ready_state() == web_sys::RtcDataChannelState::Open {
                 s.borrow_mut().core.on_pc_open(mid, path, gen, now());
                 perform(&s);
+                read_candidates(&s, mid, path, gen);
             }
         });
         pc.set_ondatachannel(Some(f.as_ref().unchecked_ref()));
@@ -565,8 +629,9 @@ pub struct WebEngine {
 
 #[wasm_bindgen]
 impl WebEngine {
-    /// `config`: `{edge, key, conn?, client?, player_token?, no_webrtc?, away?}` (JSON).
-    /// `"away": true` opts in to the away grace (off by default).
+    /// `config`: `{edge, key, conn?, client?, player_token?, no_webrtc?, away?, no_net_stats?}` (JSON).
+    /// `"away": true` opts in to the away grace (off by default). `"no_net_stats": true`
+    /// stops the room network stats reports (on by default; PROTOCOL.md "Network stats").
     #[wasm_bindgen(constructor)]
     pub fn new(config: &str) -> Result<WebEngine, JsValue> {
         let cfg: Config =
