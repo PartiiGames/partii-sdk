@@ -241,6 +241,8 @@ def analyse(runs, regions, cap_s):
                 "ice": p(m, pathname, "ice"),
                 "edge_colo": m.get("edge_colo"),
                 "errors": m.get("errors"),
+                "link_rtt": {k: (v.get("link_rtt") or 0) + (25 if k == "ws" else 0)
+                             for k, v in (m.get("paths") or {}).items() if v.get("opened") and v.get("link_rtt")},
             }
             matrix.setdefault(run["host"], {}).setdefault(m.get("region") or "?", {})[mode] = cell
 
@@ -259,14 +261,19 @@ def analyse(runs, regions, cap_s):
                         fails.append(f"{h}->{r} {mode} did not open" + (f" ({c['errors']})" if c and c.get("errors") else ""))
                 forced = {k: modes[k]["p50"] for k in ("ws", "turn", "direct") if modes.get(k) and modes[k]["opened"] and modes[k]["p50"] is not None}
                 a = modes.get("auto")
-                if forced and a and a.get("final_path") in forced:
+                # Judge auto against the paths it measured at the same time (its
+                # link RTTs; ws with its 25 ms penalty): forced sub-runs are
+                # minutes apart and Internet routes move (iad->sjc direct: 64 ms
+                # in the auto run, 91 ms in the forced one).
+                live = (a or {}).get("link_rtt") or {}
+                if a and a.get("final_path") in live:
                     auto_n += 1
-                    best = min(forced.values())
-                    got = forced[a["final_path"]]
+                    best = min(live.values())
+                    got = live[a["final_path"]]
                     if got <= best + max(5.0, 0.1 * best):
                         auto_ok += 1
                     else:
-                        fails.append(f"{h}->{r} auto settled on {a['final_path']} ({got} ms) but best is {min(forced, key=forced.get)} ({best} ms)")
+                        fails.append(f"{h}->{r} auto settled on {a['final_path']} ({got} ms) but {min(live, key=live.get)} measured {best} ms")
                 if CONTINENT.get(h) != CONTINENT.get(r) and "ws" in forced and "turn" in forced:
                     turn_cmp.append((h, r, forced["turn"], forced["ws"]))
         turn_worse = [f"{h}->{r} turn p50 {t} > ws p50 {w}" for h, r, t, w in turn_cmp if t > w]
@@ -307,7 +314,9 @@ def analyse(runs, regions, cap_s):
             if not row["udp_blocked"]:
                 fails.append(f"{r}: UDP was not blocked")
             if not turn_open:
-                fails.append(f"{r}: turn did not open with UDP blocked")
+                joined = bool(t and t.get("join_ms"))
+                fails.append(f"{r}: turn did not open with UDP blocked" if joined
+                             else f"{r}: never joined the room ({(t or {}).get('errors')}): an edge error, not a path")
             elif row["ws_p50_open_net"] is not None and row["turn_p50"] > row["ws_p50_open_net"] + 5:
                 fails.append(f"{r}: turn p50 {row['turn_p50']} > ws p50 {row['ws_p50_open_net']}")
         cases["b"] = {"host": b_runs[0]["host"], "rows": rows, "failures": fails, "pass": not fails and bool(rows)}
@@ -430,7 +439,15 @@ def main():
     ap.add_argument("--edge", default=os.environ.get("PARTII_EDGE", STAGING))
     ap.add_argument("--out", required=True)
     ap.add_argument("--builder-usd", type=float, default=0.05)
+    ap.add_argument("--reanalyse", action="store_true", help="rebuild report.md/json from <out>/results.json (no machines)")
     a = ap.parse_args()
+    if a.reanalyse:
+        OUT = a.out
+        runs = json.load(open(os.path.join(OUT, "results.json")))
+        old = json.load(open(os.path.join(OUT, "report.json")))
+        matrix, verdict = analyse(runs, [], 0)
+        write_report(runs, [], matrix, verdict, old["cost"], old["machines_left"], old["wall_s"], old["meta"])
+        return 0
     # run.sh's cap/watchdog sends SIGTERM: unwind through `finally` (destroy, report).
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     if "partii.games" in a.edge and "staging" not in a.edge:

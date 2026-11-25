@@ -1,0 +1,3069 @@
+{
+ "meta": {
+  "when": "2026-11-25 04:43 UTC",
+  "edge": "https://partii-edge-staging.partii-games.workers.dev",
+  "image": "registry.fly.io/partii-relay-test:probe-8b99898",
+  "regions": [
+   "fra",
+   "gru",
+   "iad",
+   "jnb",
+   "lhr",
+   "nrt",
+   "sin",
+   "sjc",
+   "syd"
+  ]
+ },
+ "cases": {
+  "a": {
+   "pairs": 8,
+   "open_failures": [],
+   "auto_picks_lowest": "8/8",
+   "auto_failures": [],
+   "turn_vs_ws_cross_continent": "7/7 turn <= ws",
+   "turn_worse": [],
+   "hosts": [
+    "iad"
+   ],
+   "pass": true
+  },
+  "d": {
+   "pairs": 24,
+   "open_failures": [],
+   "auto_picks_lowest": "24/24",
+   "auto_failures": [],
+   "turn_vs_ws_cross_continent": "21/21 turn <= ws",
+   "turn_worse": [],
+   "hosts": [
+    "fra",
+    "iad",
+    "sin"
+   ],
+   "pass": true
+  },
+  "b": {
+   "host": "iad",
+   "rows": [
+    {
+     "region": "fra",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 99.9,
+     "turn_tls": true,
+     "turn_open_ms": 3118.9,
+     "auto_final": "turn",
+     "auto_p50": 104.1,
+     "ws_p50_open_net": 131.8
+    },
+    {
+     "region": "gru",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 140.9,
+     "turn_tls": true,
+     "turn_open_ms": 2614.0,
+     "auto_final": "turn",
+     "auto_p50": 135.2,
+     "ws_p50_open_net": 158.4
+    },
+    {
+     "region": "jnb",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 258.3,
+     "turn_tls": true,
+     "turn_open_ms": 3511.8,
+     "auto_final": "turn",
+     "auto_p50": 254.2,
+     "ws_p50_open_net": 393.3
+    },
+    {
+     "region": "lhr",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 89.7,
+     "turn_tls": true,
+     "turn_open_ms": 2215.1,
+     "auto_final": "turn",
+     "auto_p50": 88.5,
+     "ws_p50_open_net": 144.2
+    },
+    {
+     "region": "nrt",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 174.7,
+     "turn_tls": true,
+     "turn_open_ms": 3122.1,
+     "auto_final": "turn",
+     "auto_p50": 170.0,
+     "ws_p50_open_net": 469.9
+    },
+    {
+     "region": "sin",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 234.8,
+     "turn_tls": true,
+     "turn_open_ms": 4524.0,
+     "auto_final": "turn",
+     "auto_p50": 242.4,
+     "ws_p50_open_net": 324.3
+    },
+    {
+     "region": "sjc",
+     "udp_blocked": true,
+     "turn_opened": true,
+     "turn_p50": 78.2,
+     "turn_tls": true,
+     "turn_open_ms": 2010.5,
+     "auto_final": "turn",
+     "auto_p50": 88.1,
+     "ws_p50_open_net": 129.5
+    },
+    {
+     "region": "syd",
+     "udp_blocked": true,
+     "turn_opened": false,
+     "turn_p50": null,
+     "turn_tls": false,
+     "turn_open_ms": null,
+     "auto_final": "turn",
+     "auto_p50": 234.4,
+     "ws_p50_open_net": 281.0
+    }
+   ],
+   "failures": [
+    "syd: never joined the room (['join: internal: Error: Network connection lost.', 'not in the room within 20 s']): an edge error, not a path"
+   ],
+   "pass": false
+  },
+  "c": {
+   "host": "iad",
+   "rows": [
+    {
+     "region": "fra",
+     "before": "turn",
+     "switched_to": "ws",
+     "switch_ms": 947.0,
+     "play_gap_ms": 479.0,
+     "promote_back_ms": 394.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 956.3,
+     "errors": []
+    },
+    {
+     "region": "gru",
+     "before": "turn",
+     "switched_to": "ws",
+     "switch_ms": 964.0,
+     "play_gap_ms": 553.0,
+     "promote_back_ms": 395.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1003.7,
+     "errors": []
+    },
+    {
+     "region": "jnb",
+     "before": "turn",
+     "switched_to": "ws",
+     "switch_ms": 840.0,
+     "play_gap_ms": 679.0,
+     "promote_back_ms": 611.0,
+     "promoted_to": "turn",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1149.0,
+     "errors": []
+    },
+    {
+     "region": "lhr",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 954.0,
+     "play_gap_ms": 526.0,
+     "promote_back_ms": 405.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 954.1,
+     "errors": []
+    },
+    {
+     "region": "nrt",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 814.0,
+     "play_gap_ms": 585.0,
+     "promote_back_ms": 594.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1053.3,
+     "errors": []
+    },
+    {
+     "region": "sin",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 811.0,
+     "play_gap_ms": 671.0,
+     "promote_back_ms": 541.0,
+     "promoted_to": "turn",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1304.4,
+     "errors": []
+    },
+    {
+     "region": "sjc",
+     "before": "turn",
+     "switched_to": "ws",
+     "switch_ms": 859.0,
+     "play_gap_ms": 429.0,
+     "promote_back_ms": 348.0,
+     "promoted_to": "turn",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1021.0,
+     "errors": []
+    },
+    {
+     "region": "syd",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 910.0,
+     "play_gap_ms": 627.0,
+     "promote_back_ms": 678.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1229.2,
+     "errors": []
+    }
+   ],
+   "failures": [],
+   "pass": true
+  },
+  "c_iptables": {
+   "host": "iad",
+   "rows": [
+    {
+     "region": "fra",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 924.0,
+     "play_gap_ms": 722.0,
+     "promote_back_ms": 6795.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1166.4,
+     "errors": []
+    },
+    {
+     "region": "gru",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 811.0,
+     "play_gap_ms": 542.0,
+     "promote_back_ms": 17411.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1092.5,
+     "errors": []
+    },
+    {
+     "region": "jnb",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 878.0,
+     "play_gap_ms": 663.0,
+     "promote_back_ms": 8666.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1197.9,
+     "errors": []
+    },
+    {
+     "region": "lhr",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 850.0,
+     "play_gap_ms": 545.0,
+     "promote_back_ms": 6678.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1160.7,
+     "errors": []
+    },
+    {
+     "region": "nrt",
+     "before": "turn",
+     "switched_to": "ws",
+     "switch_ms": 768.0,
+     "play_gap_ms": 582.0,
+     "promote_back_ms": 28728.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1200.9,
+     "errors": []
+    },
+    {
+     "region": "sin",
+     "before": "turn",
+     "switched_to": "ws",
+     "switch_ms": 772.0,
+     "play_gap_ms": 687.0,
+     "promote_back_ms": 10159.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1596.6,
+     "errors": []
+    },
+    {
+     "region": "sjc",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 792.0,
+     "play_gap_ms": 697.0,
+     "promote_back_ms": 7268.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1179.2,
+     "errors": []
+    },
+    {
+     "region": "syd",
+     "before": "direct",
+     "switched_to": "ws",
+     "switch_ms": 897.0,
+     "play_gap_ms": 637.0,
+     "promote_back_ms": 8014.0,
+     "promoted_to": "direct",
+     "rel_missing": 0,
+     "rel_out_of_order": 0,
+     "rel_max_rtt_ms": 1147.0,
+     "errors": []
+    }
+   ],
+   "failures": [],
+   "pass": true
+  },
+  "zero_machines_left": {
+   "pass": true,
+   "left": []
+  }
+ },
+ "matrix": {
+  "iad": {
+   "fra": {
+    "auto": {
+     "opened": true,
+     "open_ms": 748.7,
+     "p50": 90.3,
+     "p95": 90.9,
+     "p99": 283.1,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "direct": 89.8,
+      "turn": 99.4,
+      "ws": 170.3
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 403.3,
+     "p50": 131.8,
+     "p95": 373.3,
+     "p99": 683.2,
+     "loss": 0.0012,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "ws": 137.8
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 1712.0,
+     "p50": 92.3,
+     "p95": 92.8,
+     "p99": 93.3,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "turn": 91.5
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 1709.2,
+     "p50": 86.6,
+     "p95": 87.2,
+     "p99": 87.4,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "direct": 86.2
+     }
+    }
+   },
+   "gru": {
+    "auto": {
+     "opened": true,
+     "open_ms": 579.3,
+     "p50": 130.7,
+     "p95": 131.3,
+     "p99": 132.4,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "direct": 130.2,
+      "turn": 136.6,
+      "ws": 207.3
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 402.6,
+     "p50": 158.4,
+     "p95": 208.2,
+     "p99": 241.5,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "ws": 185.4
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 10669.5,
+     "p50": 135.0,
+     "p95": 135.5,
+     "p99": 136.0,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "turn": 134.5
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2012.0,
+     "p50": 132.7,
+     "p95": 133.2,
+     "p99": 133.5,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "direct": 132.4
+     }
+    }
+   },
+   "jnb": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1029.4,
+     "p50": 243.3,
+     "p95": 244.3,
+     "p99": 460.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "direct": 242.9,
+      "turn": 246.4,
+      "ws": 308.8
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 603.6,
+     "p50": 393.3,
+     "p95": 537.6,
+     "p99": 621.1,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "ws": 295.1
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2911.6,
+     "p50": 248.0,
+     "p95": 248.9,
+     "p99": 250.3,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "turn": 247.5
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 11757.9,
+     "p50": 234.6,
+     "p95": 235.2,
+     "p99": 235.9,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "direct": 234.0
+     }
+    }
+   },
+   "lhr": {
+    "auto": {
+     "opened": true,
+     "open_ms": 619.8,
+     "p50": 74.4,
+     "p95": 75.1,
+     "p99": 75.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "direct": 74.3,
+      "turn": 88.7,
+      "ws": 145.9
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 402.8,
+     "p50": 144.2,
+     "p95": 275.9,
+     "p99": 330.4,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "ws": 123.5
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 1708.4,
+     "p50": 79.3,
+     "p95": 80.0,
+     "p99": 82.2,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "turn": 78.9
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 1503.4,
+     "p50": 74.5,
+     "p95": 75.2,
+     "p99": 75.4,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "direct": 74.0
+     }
+    }
+   },
+   "nrt": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1232.8,
+     "p50": 182.7,
+     "p95": 397.6,
+     "p99": 710.1,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "direct": 184.0,
+      "turn": 182.1,
+      "ws": 263.1
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 503.8,
+     "p50": 469.9,
+     "p95": 762.8,
+     "p99": 809.9,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "ws": 233.1
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2611.7,
+     "p50": 192.8,
+     "p95": 195.3,
+     "p99": 202.0,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "turn": 192.8
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 11473.3,
+     "p50": 185.7,
+     "p95": 403.2,
+     "p99": 437.5,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "direct": 249.6
+     }
+    }
+   },
+   "sin": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1453.0,
+     "p50": 254.3,
+     "p95": 256.8,
+     "p99": 835.0,
+     "loss": 0.0014,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "direct": 254.0,
+      "turn": 240.7,
+      "ws": 354.3
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 704.4,
+     "p50": 324.3,
+     "p95": 1073.7,
+     "p99": 1129.8,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "ws": 280.9
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 3518.0,
+     "p50": 228.9,
+     "p95": 229.8,
+     "p99": 230.8,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "turn": 228.3
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 4627.9,
+     "p50": 249.2,
+     "p95": 250.5,
+     "p99": 251.6,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "direct": 248.9
+     }
+    }
+   },
+   "sjc": {
+    "auto": {
+     "opened": true,
+     "open_ms": 638.1,
+     "p50": 64.3,
+     "p95": 64.8,
+     "p99": 64.9,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "direct": 63.7,
+      "turn": 84.8,
+      "ws": 141.8
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 302.3,
+     "p50": 129.5,
+     "p95": 244.2,
+     "p99": 289.1,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "ws": 128.5
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 1608.3,
+     "p50": 76.2,
+     "p95": 78.4,
+     "p99": 199.0,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": true,
+       "type": "relay",
+       "url": "turn:127.0.0.1:60805?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "turn": 84.0
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 10765.6,
+     "p50": 91.1,
+     "p95": 91.5,
+     "p99": 91.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "direct": 90.5
+     }
+    }
+   },
+   "syd": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1481.7,
+     "p50": 198.8,
+     "p95": 200.1,
+     "p99": 1027.4,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 198.4,
+      "turn": 216.6,
+      "ws": 317.7
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 703.2,
+     "p50": 281.0,
+     "p95": 1052.9,
+     "p99": 1114.4,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "ws": 286.6
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 4422.4,
+     "p50": 207.9,
+     "p95": 208.8,
+     "p99": 209.7,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "turn": 207.3
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 3613.7,
+     "p50": 197.6,
+     "p95": 198.1,
+     "p99": 198.5,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 197.1
+     }
+    }
+   }
+  },
+  "fra": {
+   "gru": {
+    "auto": {
+     "opened": true,
+     "open_ms": 806.6,
+     "p50": 140.9,
+     "p95": 141.7,
+     "p99": 305.9,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "direct": 208.4,
+      "turn": 140.3,
+      "ws": 253.8
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 503.5,
+     "p50": 415.0,
+     "p95": 572.5,
+     "p99": 647.9,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "ws": 278.8
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2212.9,
+     "p50": 142.7,
+     "p95": 143.7,
+     "p99": 144.4,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "turn": 142.0
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2414.0,
+     "p50": 202.0,
+     "p95": 202.6,
+     "p99": 202.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "direct": 201.5
+     }
+    }
+   },
+   "iad": {
+    "auto": {
+     "opened": true,
+     "open_ms": 778.7,
+     "p50": 92.6,
+     "p95": 93.5,
+     "p99": 233.7,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 92.3,
+      "turn": 99.1,
+      "ws": 165.4
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 302.3,
+     "p50": 221.9,
+     "p95": 318.2,
+     "p99": 384.4,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "ws": 136.3
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 1608.2,
+     "p50": 89.7,
+     "p95": 90.7,
+     "p99": 97.5,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "turn": 88.9
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 1604.8,
+     "p50": 90.3,
+     "p95": 90.8,
+     "p99": 91.2,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 89.7
+     }
+    }
+   },
+   "jnb": {
+    "auto": {
+     "opened": true,
+     "open_ms": 749.4,
+     "p50": 163.2,
+     "p95": 163.8,
+     "p99": 166.9,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "direct": 162.7,
+      "turn": 179.6,
+      "ws": 232.1
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 502.0,
+     "p50": 192.0,
+     "p95": 235.9,
+     "p99": 285.5,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "ws": 220.2
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2307.8,
+     "p50": 178.9,
+     "p95": 179.6,
+     "p99": 180.2,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "turn": 178.3
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2110.2,
+     "p50": 161.5,
+     "p95": 162.1,
+     "p99": 162.7,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "direct": 160.9
+     }
+    }
+   },
+   "lhr": {
+    "auto": {
+     "opened": true,
+     "open_ms": 359.0,
+     "p50": 17.5,
+     "p95": 18.4,
+     "p99": 19.4,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "direct": 14.8,
+      "turn": 17.2,
+      "ws": 60.2
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 101.2,
+     "p50": 31.2,
+     "p95": 50.4,
+     "p99": 76.7,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "ws": 58.2
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 9744.3,
+     "p50": 16.2,
+     "p95": 16.5,
+     "p99": 17.4,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "turn": 15.6
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 601.5,
+     "p50": 15.1,
+     "p95": 16.1,
+     "p99": 16.3,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "direct": 14.8
+     }
+    }
+   },
+   "nrt": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1481.0,
+     "p50": 230.8,
+     "p95": 231.7,
+     "p99": 677.1,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "direct": 248.4,
+      "turn": 230.2,
+      "ws": 514.1
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 704.0,
+     "p50": 656.9,
+     "p95": 1066.6,
+     "p99": 1131.8,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "ws": 287.5
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 3518.8,
+     "p50": 253.8,
+     "p95": 254.8,
+     "p99": 255.3,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "turn": 252.8
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 3320.2,
+     "p50": 250.4,
+     "p95": 251.6,
+     "p99": 252.4,
+     "loss": 0.004,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "direct": 250.0
+     }
+    }
+   },
+   "sin": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1226.7,
+     "p50": 154.6,
+     "p95": 155.2,
+     "p99": 309.3,
+     "loss": 0.0013,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "direct": 154.1,
+      "turn": 157.7,
+      "ws": 226.5
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 603.7,
+     "p50": 337.4,
+     "p95": 512.7,
+     "p99": 649.7,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "ws": 208.4
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2714.4,
+     "p50": 156.5,
+     "p95": 158.0,
+     "p99": 523.7,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": true,
+       "type": "relay",
+       "url": "turn:127.0.0.1:58942?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "turn": 156.1
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2514.5,
+     "p50": 155.4,
+     "p95": 156.0,
+     "p99": 156.4,
+     "loss": 0.0026,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SIN",
+     "errors": [],
+     "link_rtt": {
+      "direct": 154.8
+     }
+    }
+   },
+   "sjc": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1008.8,
+     "p50": 157.8,
+     "p95": 158.5,
+     "p99": 403.9,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "direct": 157.4,
+      "turn": 153.4,
+      "ws": 229.2
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 301.7,
+     "p50": 309.6,
+     "p95": 533.9,
+     "p99": 638.8,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "ws": 203.7
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2512.1,
+     "p50": 151.0,
+     "p95": 153.0,
+     "p99": 165.5,
+     "loss": 0.0039,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "turn": 150.2
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2213.1,
+     "p50": 163.3,
+     "p95": 164.0,
+     "p99": 164.2,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "direct": 163.0
+     }
+    }
+   },
+   "syd": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1877.0,
+     "p50": 249.8,
+     "p95": 250.8,
+     "p99": 925.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 249.4,
+      "turn": 251.9,
+      "ws": 406.1
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 803.7,
+     "p50": 892.8,
+     "p95": 1447.3,
+     "p99": 1520.6,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "ws": 863.5
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 3816.0,
+     "p50": 254.1,
+     "p95": 256.3,
+     "p99": 258.0,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "turn": 253.9
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 3615.8,
+     "p50": 252.5,
+     "p95": 253.1,
+     "p99": 253.5,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 252.1
+     }
+    }
+   }
+  },
+  "sin": {
+   "fra": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1171.2,
+     "p50": 154.0,
+     "p95": 154.8,
+     "p99": 206.4,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "direct": 153.5,
+      "turn": 171.7,
+      "ws": 226.8
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 603.4,
+     "p50": 330.3,
+     "p95": 479.1,
+     "p99": 585.5,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "ws": 215.8
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2816.8,
+     "p50": 171.6,
+     "p95": 172.2,
+     "p99": 172.6,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "turn": 171.0
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2414.4,
+     "p50": 153.5,
+     "p95": 154.6,
+     "p99": 339.2,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "FRA",
+     "errors": [],
+     "link_rtt": {
+      "direct": 153.6
+     }
+    }
+   },
+   "gru": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1658.4,
+     "p50": 300.1,
+     "p95": 301.9,
+     "p99": 565.7,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "direct": 338.0,
+      "turn": 299.7,
+      "ws": 422.9
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 804.6,
+     "p50": 482.7,
+     "p95": 994.8,
+     "p99": 1195.2,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "ws": 399.2
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 3823.3,
+     "p50": 306.4,
+     "p95": 307.5,
+     "p99": 308.7,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "turn": 305.9
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 4121.6,
+     "p50": 348.8,
+     "p95": 349.6,
+     "p99": 421.1,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "GRU",
+     "errors": [],
+     "link_rtt": {
+      "direct": 348.3
+     }
+    }
+   },
+   "iad": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1532.0,
+     "p50": 241.3,
+     "p95": 242.0,
+     "p99": 725.7,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 240.8,
+      "turn": 234.6,
+      "ws": 340.3
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 604.0,
+     "p50": 639.6,
+     "p95": 804.9,
+     "p99": 899.3,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "ws": 287.2
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 3313.8,
+     "p50": 233.2,
+     "p95": 239.8,
+     "p99": 245.9,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "turn": 233.6
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 3311.0,
+     "p50": 243.6,
+     "p95": 244.2,
+     "p99": 244.6,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "IAD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 243.2
+     }
+    }
+   },
+   "jnb": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1288.4,
+     "p50": 145.3,
+     "p95": 146.1,
+     "p99": 682.7,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "direct": 144.9,
+      "turn": 302.9,
+      "ws": 355.4
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 702.4,
+     "p50": 461.6,
+     "p95": 617.2,
+     "p99": 721.9,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "ws": 342.2
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 3916.1,
+     "p50": 298.5,
+     "p95": 300.0,
+     "p99": 302.3,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "turn": 298.2
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2811.9,
+     "p50": 145.3,
+     "p95": 146.0,
+     "p99": 147.3,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "JNB",
+     "errors": [],
+     "link_rtt": {
+      "direct": 144.8
+     }
+    }
+   },
+   "lhr": {
+    "auto": {
+     "opened": true,
+     "open_ms": 1179.6,
+     "p50": 156.6,
+     "p95": 158.1,
+     "p99": 411.7,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "direct": 223.9,
+      "turn": 156.0,
+      "ws": 223.5
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 503.0,
+     "p50": 348.1,
+     "p95": 496.7,
+     "p99": 630.4,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "ws": 210.8
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2712.7,
+     "p50": 165.0,
+     "p95": 165.8,
+     "p99": 166.8,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": null,
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "turn": 164.6
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 3115.4,
+     "p50": 223.7,
+     "p95": 224.4,
+     "p99": 224.9,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "LHR",
+     "errors": [],
+     "link_rtt": {
+      "direct": 223.2
+     }
+    }
+   },
+   "nrt": {
+    "auto": {
+     "opened": true,
+     "open_ms": 725.0,
+     "p50": 67.6,
+     "p95": 68.1,
+     "p99": 68.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "direct": 67.3,
+      "turn": 69.0,
+      "ws": 119.7
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 301.5,
+     "p50": 154.0,
+     "p95": 253.6,
+     "p99": 335.4,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "ws": 120.3
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 1811.0,
+     "p50": 76.3,
+     "p95": 77.7,
+     "p99": 79.5,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:443?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "turn": 76.1
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 1508.5,
+     "p50": 67.7,
+     "p95": 68.3,
+     "p99": 68.8,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "NRT",
+     "errors": [],
+     "link_rtt": {
+      "direct": 67.1
+     }
+    }
+   },
+   "sjc": {
+    "auto": {
+     "opened": true,
+     "open_ms": 886.2,
+     "p50": 164.5,
+     "p95": 165.2,
+     "p99": 649.0,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "direct": 164.1,
+      "turn": 179.6,
+      "ws": 249.6
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 301.7,
+     "p50": 324.2,
+     "p95": 470.4,
+     "p99": 596.7,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "ws": 229.6
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 2513.5,
+     "p50": 167.8,
+     "p95": 170.1,
+     "p99": 462.7,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": true,
+       "type": "relay",
+       "url": "turn:127.0.0.1:59364?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "turn": 167.4
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2714.1,
+     "p50": 164.3,
+     "p95": 164.9,
+     "p99": 165.1,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SJC",
+     "errors": [],
+     "link_rtt": {
+      "direct": 163.8
+     }
+    }
+   },
+   "syd": {
+    "auto": {
+     "opened": true,
+     "open_ms": 898.0,
+     "p50": 98.1,
+     "p95": 99.3,
+     "p99": 246.0,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 201.1,
+      "turn": 97.7,
+      "ws": 156.8
+     }
+    },
+    "ws": {
+     "opened": true,
+     "open_ms": 501.5,
+     "p50": 190.6,
+     "p95": 344.6,
+     "p99": 402.1,
+     "loss": 0.0,
+     "final_path": "ws",
+     "ice": null,
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "ws": 149.5
+     }
+    },
+    "turn": {
+     "opened": true,
+     "open_ms": 10555.7,
+     "p50": 99.4,
+     "p95": 101.5,
+     "p99": 102.8,
+     "loss": 0.0,
+     "final_path": "turn",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": "turn:turn.cloudflare.com:3478?transport=udp"
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "relay",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "turn": 99.1
+     }
+    },
+    "direct": {
+     "opened": true,
+     "open_ms": 2510.8,
+     "p50": 202.2,
+     "p95": 202.8,
+     "p99": 203.2,
+     "loss": 0.0,
+     "final_path": "direct",
+     "ice": {
+      "local": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "host",
+       "url": ""
+      },
+      "remote": {
+       "protocol": "udp",
+       "relay_protocol": "Unspecified",
+       "tls_bridge": false,
+       "type": "srflx",
+       "url": ""
+      },
+      "selected": true
+     },
+     "edge_colo": "SYD",
+     "errors": [],
+     "link_rtt": {
+      "direct": 201.8
+     }
+    }
+   }
+  }
+ },
+ "cost": {
+  "machine_hours": 2.896452003452513,
+  "machines_usd": 0.011585808013810052,
+  "egress_gb": 0.065664,
+  "egress_usd": 0.00262656,
+  "builder_usd": 0.05,
+  "total_usd": 0.06421236801381006
+ },
+ "machines_left": [],
+ "wall_s": 1160
+}
