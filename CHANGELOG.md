@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 (unreleased)
+## 0.2.1 (2026-11-25)
 
 Every SDK crate moves to 0.2.1. Patch bump: one new `Config` field, on by default.
 
@@ -12,7 +12,7 @@ Every SDK crate moves to 0.2.1. Patch bump: one new `Config` field, on by defaul
   - The hello says `caps: ["reset", "net_stats"]` now (plus `"away"` when opted in). Wire details: partii's PROTOCOL.md "Network stats".
   - For drivers: `Core::on_pc_candidates(mid, path, gen, local, remote)` takes the selected candidate types (the web engine reads them itself); `Link::take_rtt_samples`.
 
-## 0.2.0 (2026-11-30)
+## 0.2.0 (not published on its own; included in 0.2.1)
 
 Every SDK crate moves to 0.2.0 (one workspace version). Minor bump: new public fields and enum variants.
 
@@ -46,7 +46,7 @@ Every SDK crate moves to 0.2.0 (one workspace version). Minor bump: new public f
 - `partii-client`: **feature flags** (`partii_client::flags`): `Flags::new(FlagsConfig { base, key, game, defaults, ranges, cache_path, .. })`, `get` / `get_bool` / `get_int` / `get_str` / `all` at once, `refresh()` (blocking, 2 s timeout, `If-None-Match` / 304, never panics or errors: offline is the disk cache, else the compiled defaults), `match_values()` for the host handshake, and the admin calls `admin()`, `override_flag()`, `clear_override()`. Only values of the compiled default's type are taken, and ints only within the flag's range (the edge's `ranges` and the game's own). The generated table has int flags' `min` / `max` on `flagsDefine`. Additive.
 - `partii-client`: the referral portal (`referralsVisit`, `referralsHistory`, `referralsDashboard`; CLI `partii referrals visit|history|dashboard`) a project's Stripe dashboard link (`payoutsDashboard`; CLI `partii payouts dashboard`), and the sales of the projects a player runs as a developer (`playerProjectsEarnings`; CLI `partii earnings projects`). Additive.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-21)
 
 First public release.
 

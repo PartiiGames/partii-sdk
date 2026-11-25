@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "partii-webrtc"
-version = "0.21.0"
+version = "0.21.1"
 authors = ["Rain Liu <yliu@webrtc.rs>"]
 build = false
 autolib = false
@@ -156,7 +156,7 @@ default-features = false
 
 [dependencies.rtc]
 package = "partii-rtc"
-version = "0.21.1"
+version = "0.21.2"
 path = "../rtc"
 default-features = false
 

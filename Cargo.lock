@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "partii-rtc"
-version = "0.21.1"
+version = "0.21.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2499,7 +2499,7 @@ dependencies = [
 
 [[package]]
 name = "partii-webrtc"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "anyhow",
  "async-broadcast",
