@@ -844,7 +844,10 @@ impl Core {
         for (_, p) in self.peers.iter_mut() {
             p.link.set_open(PathId::Ws, false, now);
         }
-        // Requests in flight on the dead socket will never be answered.
+        // Requests in flight on the dead socket will never be answered (a
+        // join waiting for its retry fails with them).
+        self.joins.clear();
+        self.join_retry.clear();
         for (id, kind) in std::mem::take(&mut self.reqs) {
             if kind == Req::Auth {
                 // The resume's hello sends the token we had, so the edge

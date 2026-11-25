@@ -1807,3 +1807,19 @@ fn a_join_gives_up_after_the_cap_and_never_retries_real_refusals() {
     c.tick(t + 1_000.0);
     assert!(texts(&c.drain()).is_empty());
 }
+
+#[test]
+fn a_join_waiting_for_its_retry_fails_once_when_the_socket_drops() {
+    let mut c = core(true);
+    online(&mut c, "ws");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(&json!({"t": "err", "id": id, "code": "internal", "message": "lost"}).to_string(), 0.0);
+    c.on_socket_closed(10.0);
+    let failed = |evs: &[Event]| evs.iter().filter(|e| matches!(e, Event::Failed { req, .. } if *req == id)).count();
+    assert_eq!(failed(&events(&c.drain())), 1);
+    c.tick(2_000.0);
+    let acts = c.drain();
+    assert!(texts(&acts).iter().all(|t| t["t"] != "join"), "no retry on a dropped socket");
+    assert_eq!(failed(&events(&acts)), 0);
+}
