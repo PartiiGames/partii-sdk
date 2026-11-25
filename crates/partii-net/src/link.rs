@@ -392,7 +392,14 @@ impl Link {
             }
             return;
         }
-        let Some(b) = best else {
+        // Only a path that is answering now is worth moving play to.
+        let Some(b) = best.filter(|p| {
+            *p == PathId::Ws
+                || self
+                    .path(*p)
+                    .last_pong
+                    .is_some_and(|t| now - t <= SUSPECT_MS)
+        }) else {
             self.candidate = None;
             return;
         };
