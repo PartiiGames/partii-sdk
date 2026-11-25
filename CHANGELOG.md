@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 (unreleased)
+
+Every SDK crate moves to 0.2.1. Patch bump: one new `Config` field, on by default.
+
+- `partii-net`: **room connection stats.** While your game is in a room, the engine tells partii how each of its links is connected, so partii can find the places where players end up on a slow path and fix them.
+  - **What's sent:** for each link, which way it goes (partii's relay, a TURN relay, or straight to the other player), how long it spent on each, how fast each was (typical and worst-case round trip), how long each took to open, how often opening one failed, the kind of network route it settled on, and whether it was stuck on partii's relay.
+  - **Nothing about players:** no addresses, no names, no player ids; only the link's member number in the room. Each link is reported by one end only.
+  - **How often:** one small message about every 30 seconds while in a room, and one last one just before the game leaves. It never holds up leaving. It goes only to an edge that asks for it, so older partii servers never see it.
+  - **Turning it off:** `Config { no_net_stats: true, .. }` (JSON `"no_net_stats": true` for `WebEngine`). Code that builds a `Config` literally needs `..Default::default()` or the new field.
+  - The hello says `caps: ["reset", "net_stats"]` now (plus `"away"` when opted in). Wire details: partii's PROTOCOL.md "Network stats".
+  - For drivers: `Core::on_pc_candidates(mid, path, gen, local, remote)` takes the selected candidate types (the web engine reads them itself); `Link::take_rtt_samples`.
+
 ## 0.2.0 (2026-11-30)
 
 Every SDK crate moves to 0.2.0 (one workspace version). Minor bump: new public fields and enum variants.

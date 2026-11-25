@@ -988,7 +988,7 @@ checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
 name = "partii-net"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -1015,11 +1015,11 @@ dependencies = [
 
 [[package]]
 name = "partii-netcode"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "partii-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
