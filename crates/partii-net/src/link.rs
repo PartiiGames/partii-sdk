@@ -644,12 +644,14 @@ mod tests {
             s.open(p, true);
         }
         s.step(3000.0);
+        assert_eq!(s.a.current(), PathId::Direct);
         s.blackhole(PathId::Direct);
         s.blackhole(PathId::Turn);
+        let seen = s.got_a.len();
         s.step(1500.0);
         assert_eq!(s.a.current(), PathId::Ws);
         assert!(
-            !s.got_a.iter().any(|e| matches!(
+            !s.got_a[seen..].iter().any(|e| matches!(
                 e,
                 LinkEvent::Switched {
                     to: PathId::Turn,
