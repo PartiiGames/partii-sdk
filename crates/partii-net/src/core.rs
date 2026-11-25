@@ -22,6 +22,16 @@ const PC_RETRY_MS: [f64; 5] = [1000.0, 2000.0, 4000.0, 8000.0, 10000.0];
 /// stalls is better retried at 7 s than waited on for 12 (which also held
 /// recovery after an outage to one attempt per 12 s).
 const PC_OPEN_TIMEOUT_MS: f64 = 7_000.0;
+/// After an open path dies (a network outage), it is rebuilt on a short
+/// leash for `PC_RECOVER_MS`: a retry every `PC_RECOVER_RETRY_MS` (no
+/// growing backoff) and attempts given up after `PC_RECOVER_OPEN_MS` (an
+/// attempt made while the network was still down never opens, so waiting
+/// the full `PC_OPEN_TIMEOUT_MS` on it only delays the one that will).
+/// Play is back on WebRTC within ~`PC_RECOVER_OPEN_MS` + retry + ICE
+/// (~7 s worst) of the network returning, instead of up to ~30 s.
+const PC_RECOVER_MS: f64 = 60_000.0;
+const PC_RECOVER_RETRY_MS: f64 = 1_000.0;
+const PC_RECOVER_OPEN_MS: f64 = 4_500.0;
 pub use partii_protocol::room::{BROADCAST, RELAY_BUNDLE, RELAY_FRAME};
 /// A member that joined a room it did not create holds its non-host WebRTC
 /// paths this long for the host's topology announcement (see [`Topology`]).
@@ -308,6 +318,8 @@ struct Pc {
     gen: u32,
     phase: PcPhase,
     failures: usize,
+    /// When this path last died after being open (see `PC_RECOVER_MS`).
+    lost_at: Option<f64>,
     /// What the driver reported about the open connection (the selected ICE
     /// candidate pair), for `stats`.
     info: Option<Value>,
@@ -1028,6 +1040,7 @@ impl Core {
         }
         pc.phase = PcPhase::Open;
         pc.failures = 0;
+        pc.lost_at = None;
         p.link.set_open(path, true, now);
         self.flush_link(mid, now);
     }
@@ -1043,8 +1056,16 @@ impl Core {
             return;
         }
         p.link.set_open(path, false, now);
-        let wait = PC_RETRY_MS[pc.failures.min(PC_RETRY_MS.len() - 1)];
-        pc.failures += 1;
+        if pc.phase == PcPhase::Open {
+            pc.lost_at = Some(now);
+        }
+        let wait = if pc.lost_at.is_some_and(|t| now - t < PC_RECOVER_MS) {
+            PC_RECOVER_RETRY_MS
+        } else {
+            let w = PC_RETRY_MS[pc.failures.min(PC_RETRY_MS.len() - 1)];
+            pc.failures += 1;
+            w
+        };
         pc.phase = PcPhase::Waiting {
             retry_at: now + wait,
         };
@@ -1268,6 +1289,7 @@ impl Core {
                         gen: 0,
                         phase: PcPhase::Waiting { retry_at: now },
                         failures: 0,
+                        lost_at: None,
                         info: None,
                     },
                 );
@@ -1338,7 +1360,7 @@ impl Core {
                 PcPhase::Waiting { retry_at } if offerer && online && now >= retry_at => {
                     todo.push((*path, true))
                 }
-                PcPhase::Connecting { since } if now - since > PC_OPEN_TIMEOUT_MS => {
+                PcPhase::Connecting { since } if now - since > Self::open_timeout(pc, now) => {
                     todo.push((*path, false))
                 }
                 _ => {}
@@ -1351,6 +1373,16 @@ impl Core {
                 let gen = self.peers[&mid].pcs[&path].gen;
                 self.on_pc_closed(mid, path, gen, now);
             }
+        }
+    }
+
+    /// How long an attempt may take to open: shorter while the path is
+    /// recovering from an outage (`PC_RECOVER_MS`).
+    fn open_timeout(pc: &Pc, now: f64) -> f64 {
+        if pc.lost_at.is_some_and(|t| now - t < PC_RECOVER_MS) {
+            PC_RECOVER_OPEN_MS
+        } else {
+            PC_OPEN_TIMEOUT_MS
         }
     }
 
@@ -1397,6 +1429,7 @@ impl Core {
             gen: 0,
             phase: PcPhase::Waiting { retry_at: now },
             failures: 0,
+            lost_at: None,
             info: None,
         });
         pc.gen = gen.unwrap_or(pc.gen + 1);
