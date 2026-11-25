@@ -12,6 +12,7 @@ pub mod link;
 pub mod native;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 mod turn_tls;
+pub mod netstats;
 pub use core::{AuthErrorCode, Config, Event, Member, Room, Topology, BROADCAST, TOPOLOGY_WAIT_MS};
 pub use link::PathId;
 #[cfg(all(feature = "native", not(target_arch = "wasm32")))]

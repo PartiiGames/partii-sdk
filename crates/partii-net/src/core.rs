@@ -4,6 +4,7 @@
 //! feed it what happened and carry out the `Action`s it returns.
 
 use crate::link::{Link, LinkEvent, PathId};
+use crate::netstats::{self, CandType, LinkStats, NET_STATS_CAP};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -131,6 +132,11 @@ pub struct Config {
     /// that measure one path on its own (`[Turn]`: relay only, no ws
     /// fallback). Games leave it empty.
     pub paths: Vec<PathId>,
+    /// Don't send room network stats (`netstats.rs`, PROTOCOL.md "Network
+    /// stats"). Off by default: the engine says `caps: ["net_stats"]` and, on
+    /// an edge that asks for them, sends one small report about every 30 s
+    /// while in a room and once on leave (paths, RTT, opens; no addresses).
+    pub no_net_stats: bool,
 }
 
 pub use partii_protocol::room::{Away, AuthErrorCode, IceServer, Member, Room, AWAY_CAP};
@@ -336,6 +342,7 @@ struct Peer {
     link: Link,
     connected: bool,
     pcs: BTreeMap<PathId, Pc>,
+    stats: LinkStats,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -403,6 +410,13 @@ pub struct Core {
     auths: BTreeMap<u32, Option<String>>,
     /// Paths silently dropped both ways (`blackhole`, for failover tests).
     blackholed: [bool; 3],
+    /// How often the edge asked for network stats (welcome `net_stats_ms`);
+    /// `None`: never send them (an older edge, or `Config::no_net_stats`).
+    net_every: Option<f64>,
+    /// When the last network-stats report went (or the interval started).
+    net_at: f64,
+    /// Entries of links that ended since the last report.
+    net_ended: Vec<Value>,
 }
 
 impl Core {
@@ -434,6 +448,9 @@ impl Core {
             clock: 0.0,
             auths: BTreeMap::new(),
             blackholed: [false; 3],
+            net_every: None,
+            net_at: 0.0,
+            net_ended: Vec::new(),
         }
     }
 
@@ -642,6 +659,8 @@ impl Core {
             self.reqs.remove(&id);
         }
         self.joins.clear();
+        // The links' last numbers, while the edge still knows our room.
+        self.send_net_stats(self.clock, true);
         let id = self.request(Req::Other, json!({"t": "leave"}));
         self.left_room();
         id
@@ -823,6 +842,11 @@ impl Core {
             self.pc_timers(mid, now);
             self.flush_link(mid, now);
         }
+        if let Some(every) = self.net_every {
+            if self.online() && self.room.is_some() && now - self.net_at >= every {
+                self.send_net_stats(now, false);
+            }
+        }
     }
 
     pub fn on_socket_open(&mut self, now: f64) {
@@ -833,11 +857,13 @@ impl Core {
         // restart its own link to a member that comes back fresh.
         // `away`: hold its seat for the room's away grace and tell it about
         // others with member_away / member_back (only with `Config::away`).
-        let caps: &[&str] = if self.cfg.away {
-            &["reset", AWAY_CAP]
-        } else {
-            &["reset"]
-        };
+        let mut caps: Vec<&str> = vec!["reset"];
+        if self.cfg.away {
+            caps.push(AWAY_CAP);
+        }
+        if !self.cfg.no_net_stats {
+            caps.push(NET_STATS_CAP);
+        }
         let mut hello = json!({"t": "hello", "v": 1, "key": self.cfg.key, "client": self.cfg.client, "caps": caps, "fresh": !self.ever_up});
         if let Some(t) = &self.cfg.player_token {
             hello["player_token"] = json!(t);
@@ -1094,6 +1120,9 @@ impl Core {
         if pc.gen != gen {
             return;
         }
+        if matches!(pc.phase, PcPhase::Connecting { .. }) {
+            p.stats.failed(path);
+        }
         p.link.set_open(path, false, now);
         if pc.phase == PcPhase::Open {
             pc.lost_at = Some(now);
@@ -1132,6 +1161,65 @@ impl Core {
         self.flush_link(mid, now);
     }
 
+    /// The driver read the selected ICE candidate pair of `mid`'s `path`
+    /// (generation `gen`) once it opened: `local` and `remote` are
+    /// RTCIceCandidateType names (`host`, `srflx`, `prflx`, `relay`). For the
+    /// network stats only; unknown names are ignored.
+    pub fn on_pc_candidates(
+        &mut self,
+        mid: u16,
+        path: PathId,
+        gen: u32,
+        local: &str,
+        remote: &str,
+    ) {
+        let (Some(l), Some(r)) = (CandType::parse(local), CandType::parse(remote)) else {
+            return;
+        };
+        if let Some(p) = self.peers.get_mut(&mid) {
+            if p.pcs.get(&path).is_some_and(|pc| pc.gen == gen) {
+                p.stats.candidates(path, l, r);
+            }
+        }
+    }
+
+    /// Does this engine report its link to `mid` (one end per link): a
+    /// non-host its link to the host; in a mesh, the lower mid of two non-hosts.
+    fn reports_link(&self, mid: u16) -> bool {
+        let Some(r) = self.room.as_ref() else {
+            return false;
+        };
+        r.you != r.host && (mid == r.host || r.you < mid)
+    }
+
+    /// Send a `net_stats` report now (when the edge asked for them and there
+    /// is anything to say). `final_`: the last one before leaving the room.
+    fn send_net_stats(&mut self, now: f64, final_: bool) {
+        if self.net_every.is_none() || !self.online() {
+            return;
+        }
+        self.net_at = now;
+        let mut links = std::mem::take(&mut self.net_ended);
+        let mids: Vec<u16> = self
+            .peers
+            .keys()
+            .copied()
+            .filter(|m| self.reports_link(*m))
+            .collect();
+        for mid in mids {
+            if links.len() >= netstats::MAX_LINKS {
+                break;
+            }
+            let p = self.peers.get_mut(&mid).unwrap();
+            let webrtc = !p.pcs.is_empty();
+            links.push(p.stats.report(mid, &mut p.link, now, false, webrtc));
+        }
+        links.truncate(netstats::MAX_LINKS);
+        if !links.is_empty() {
+            self.text(netstats::frame(links, final_));
+        }
+    }
+
     // ── Internals ──
 
     fn welcome(&mut self, m: &Value, now: f64) {
@@ -1143,6 +1231,12 @@ impl Core {
         self.away = None;
         self.ice = serde_json::from_value(m["ice_servers"].clone()).unwrap_or_default();
         self.relay = m["relay"].as_str().unwrap_or("ws").into();
+        self.net_every = m["net_stats_ms"]
+            .as_f64()
+            .filter(|_| !self.cfg.no_net_stats)
+            .filter(|ms| *ms > 0.0)
+            .map(|ms| ms.clamp(netstats::NET_STATS_MIN_MS, netstats::NET_STATS_MAX_MS));
+        self.net_at = now;
         let resumed = m["resumed"].as_bool().unwrap_or(false);
         if resumed {
             if let Ok(room) = serde_json::from_value::<Room>(m["room"].clone()) {
@@ -1309,6 +1403,7 @@ impl Core {
 
     fn left_room(&mut self) {
         self.room = None;
+        self.net_ended.clear();
         self.away = None;
         self.topology = Topology::Mesh;
         self.settled = false;
@@ -1334,6 +1429,7 @@ impl Core {
                 link,
                 connected: false,
                 pcs: BTreeMap::new(),
+                stats: LinkStats::new(now),
             },
         );
         if !self.cfg.no_webrtc {
@@ -1364,7 +1460,15 @@ impl Core {
     }
 
     fn drop_peer(&mut self, mid: u16) {
-        if let Some(p) = self.peers.remove(&mid) {
+        // A link that ends while we stay in the room: its last numbers go in
+        // the next report (none once we're out of the room: left_room clears it first).
+        let stash = self.net_every.is_some() && self.reports_link(mid);
+        if let Some(mut p) = self.peers.remove(&mid) {
+            if stash && self.net_ended.len() < netstats::MAX_ENDED {
+                let webrtc = !p.pcs.is_empty();
+                let e = p.stats.report(mid, &mut p.link, self.clock, true, webrtc);
+                self.net_ended.push(e);
+            }
             for path in p.pcs.keys() {
                 self.out.push_back(Action::ClosePc { mid, path: *path });
             }
@@ -1706,8 +1810,12 @@ impl Core {
         let datagrams = p.link.poll(now);
         let mut events = Vec::new();
         while let Some(e) = p.link.next_event() {
+            if let LinkEvent::Switched { from, to, .. } = &e {
+                p.stats.switched(*from, *to, now);
+            }
             events.push(e);
         }
+        p.stats.observe(&p.link, now);
         if !p.connected && p.link.connected_at.is_some() {
             p.connected = true;
             events.insert(

@@ -112,7 +112,13 @@ pub struct PathState {
     pub gap_peak: f64,
     /// When the last pong gap past `SUSPECT_MS` ended.
     pub stalled_at: Option<f64>,
+    /// Raw round trips (ms) since the last net-stats report took them
+    /// (`netstats.rs`), at most `RTT_SAMPLES_MAX` (later ones overwrite).
+    pub(crate) samples: Vec<f32>,
 }
+
+/// How many raw RTT samples a path keeps between two net-stats reports.
+pub const RTT_SAMPLES_MAX: usize = 512;
 
 impl PathState {
     pub fn healthy(&self, now: f64) -> bool {
@@ -216,6 +222,10 @@ impl Link {
     fn path_mut(&mut self, p: PathId) -> &mut PathState {
         &mut self.paths[p as usize]
     }
+    /// The raw RTT samples path `p` measured since the last call.
+    pub fn take_rtt_samples(&mut self, p: PathId) -> Vec<f32> {
+        std::mem::take(&mut self.path_mut(p).samples)
+    }
     pub fn retransmits(&self) -> u64 {
         self.tx.retransmits
     }
@@ -294,6 +304,12 @@ impl Link {
                     if now - prev > SUSPECT_MS {
                         s.stalled_at = Some(now);
                     }
+                }
+                if s.samples.len() < RTT_SAMPLES_MAX {
+                    s.samples.push(sample as f32);
+                } else {
+                    let i = (s.pongs as usize) % RTT_SAMPLES_MAX;
+                    s.samples[i] = sample as f32;
                 }
                 s.last_pong = Some(now);
                 s.rtt = Some(match s.rtt {
