@@ -1744,3 +1744,73 @@ fn stats_carry_the_drivers_ice_report() {
         "relay"
     );
 }
+
+/// relay-world (c'): after a 15 s UDP outage play took 6.7-28.7 s to get
+/// back onto WebRTC, because rebuild attempts made during the outage (which
+/// never open) ran their full timeout and the backoff grew to 10 s. A path
+/// that died after being open retries every second with a short timeout.
+#[test]
+fn a_path_lost_in_an_outage_is_rebuilt_on_a_short_leash() {
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(&json!({"t": "ok", "id": id, "room": room(1, &[1, 2])}).to_string(), 0.0);
+    c.tick(1.0);
+    c.drain();
+    c.on_pc_open(2, PathId::Direct, 1, 100.0);
+    // The network goes: the driver closes the pc at 10 s.
+    c.on_pc_closed(2, PathId::Direct, 1, 10_000.0);
+    let mut starts = Vec::new();
+    let mut gen = 1;
+    let mut t = 10_000.0;
+    while t < 40_000.0 {
+        t += 50.0;
+        c.on_text("pong", t);
+        c.tick(t);
+        for a in c.drain() {
+            if let Action::CreatePc { path: PathId::Direct, gen: g, .. } = a {
+                starts.push(t);
+                gen = g;
+            }
+        }
+    }
+    // Every attempt times out (still down): one start per 4.5 s + 1 s.
+    let gaps: Vec<f64> = starts.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(starts[0] - 10_000.0 <= 1_050.0, "first retry after {} ms", starts[0] - 10_000.0);
+    assert!(gaps.iter().all(|g| *g <= 5_600.0), "attempts {gaps:?}");
+    // Back up: the next attempt opens.
+    c.on_pc_open(2, PathId::Direct, gen, t);
+    c.on_pc_closed(2, PathId::Direct, gen, t + 100.0);
+    // A new loss starts a new short leash.
+    c.on_text("pong", t + 1_200.0);
+    c.tick(t + 1_200.0);
+    assert!(c.drain().iter().any(|a| matches!(a, Action::CreatePc { path: PathId::Direct, .. })));
+}
+
+#[test]
+fn a_path_that_never_opened_keeps_the_normal_backoff() {
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.join("ABCDE", "game", "", Value::Null);
+    c.drain();
+    c.on_text(&json!({"t": "ok", "id": id, "room": room(1, &[1, 2])}).to_string(), 0.0);
+    c.tick(1.0);
+    c.drain();
+    // Never opened: times out after PC_OPEN_TIMEOUT_MS, then 1 s, 2 s, 4 s...
+    let mut starts = Vec::new();
+    let mut t = 1.0;
+    while t < 40_000.0 {
+        t += 50.0;
+        c.on_text("pong", t);
+        c.tick(t);
+        for a in c.drain() {
+            if matches!(a, Action::CreatePc { path: PathId::Direct, .. }) {
+                starts.push(t);
+            }
+        }
+    }
+    let gaps: Vec<f64> = starts.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.len() >= 2 && gaps[1] > gaps[0] + 500.0, "backoff grows: {gaps:?}");
+    assert!(gaps[0] >= PC_OPEN_TIMEOUT_MS, "full timeout: {gaps:?}");
+}
