@@ -78,7 +78,9 @@ fn args() -> Args {
         }
     }
     if a.role != "host" && a.role != "member" {
-        eprintln!("usage: net-probe host|member [--code C] [--path auto|ws|turn|direct] [--secs S]");
+        eprintln!(
+            "usage: net-probe host|member [--code C] [--path auto|ws|turn|direct] [--secs S]"
+        );
         std::process::exit(2);
     }
     a
@@ -99,7 +101,12 @@ fn pct(sorted: &[f64], p: f64) -> Option<f64> {
 /// Cloudflare's trace for a host: which colo answered (best effort, curl).
 fn colo(url_host: &str) -> Option<String> {
     let out = Command::new("curl")
-        .args(["-s", "-m", "5", &format!("https://{url_host}/cdn-cgi/trace")])
+        .args([
+            "-s",
+            "-m",
+            "5",
+            &format!("https://{url_host}/cdn-cgi/trace"),
+        ])
         .output()
         .ok()?;
     String::from_utf8_lossy(&out.stdout)
@@ -107,24 +114,75 @@ fn colo(url_host: &str) -> Option<String> {
         .find_map(|l| l.strip_prefix("colo=").map(str::to_string))
 }
 
-/// UDP dropped both ways (DNS still allowed), v4 and v6. Needs root.
+/// UDP dropped both ways, v4 and v6, as a UDP-blocking firewall does:
+/// loopback and DNS to this machine's resolvers stay open (DNS to anything
+/// else is dropped too, so TURN over UDP 53 cannot sneak through). Needs root.
 fn iptables_udp(on: bool) -> Result<(), String> {
     let op = if on { "-I" } else { "-D" };
-    for bin in ["iptables", "ip6tables"] {
-        let rules: [&[&str]; 4] = [
-            &["OUTPUT", "-p", "udp", "-j", "DROP"],
-            &["INPUT", "-p", "udp", "-j", "DROP"],
-            &["OUTPUT", "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
-            &["INPUT", "-p", "udp", "--sport", "53", "-j", "ACCEPT"],
+    let resolvers: Vec<String> = std::fs::read_to_string("/etc/resolv.conf")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("nameserver").map(|a| a.trim().to_string()))
+        .collect();
+    for (bin, v6) in [("iptables", false), ("ip6tables", true)] {
+        let mut rules: Vec<Vec<String>> = vec![
+            vec![
+                "OUTPUT".into(),
+                "-p".into(),
+                "udp".into(),
+                "-j".into(),
+                "DROP".into(),
+            ],
+            vec![
+                "INPUT".into(),
+                "-p".into(),
+                "udp".into(),
+                "-j".into(),
+                "DROP".into(),
+            ],
         ];
-        // -I prepends, so the DNS accepts go in last to sit first.
+        for r in resolvers.iter().filter(|r| r.contains(':') == v6) {
+            rules.push(vec![
+                "OUTPUT".into(),
+                "-p".into(),
+                "udp".into(),
+                "-d".into(),
+                r.clone(),
+                "--dport".into(),
+                "53".into(),
+                "-j".into(),
+                "ACCEPT".into(),
+            ]);
+            rules.push(vec![
+                "INPUT".into(),
+                "-p".into(),
+                "udp".into(),
+                "-s".into(),
+                r.clone(),
+                "--sport".into(),
+                "53".into(),
+                "-j".into(),
+                "ACCEPT".into(),
+            ]);
+        }
+        rules.push(vec![
+            "OUTPUT".into(),
+            "-o".into(),
+            "lo".into(),
+            "-j".into(),
+            "ACCEPT".into(),
+        ]);
+        rules.push(vec![
+            "INPUT".into(),
+            "-i".into(),
+            "lo".into(),
+            "-j".into(),
+            "ACCEPT".into(),
+        ]);
+        // -I prepends, so the accepts (inserted last) sit above the drops.
         for r in rules {
-            let st = Command::new(bin).arg(op).args(r).status();
-            match st {
-                Ok(s) if s.success() => {}
-                Ok(s) if !on => {
-                    let _ = s;
-                }
+            match Command::new(bin).arg(op).args(&r).status() {
+                Ok(s) if s.success() || !on => {}
                 Ok(s) => return Err(format!("{bin} {op} {}: {s}", r.join(" "))),
                 Err(e) if on => return Err(format!("{bin}: {e}")),
                 Err(_) => {}
@@ -216,20 +274,33 @@ fn host(a: &Args) {
         match ev {
             Event::Created { req: r, room } if r == req => {
                 let _ = std::fs::write(&a.code_file, &room.code);
-                eprintln!("{}", json!({"ev": "created", "code": room.code, "ms": ms(t0)}));
+                eprintln!(
+                    "{}",
+                    json!({"ev": "created", "code": room.code, "ms": ms(t0)})
+                );
                 code = Some(room.code);
             }
-            Event::Failed { req: r, code: c, message } if r == req => {
-                println!("{}", json!({"role": "host", "error": format!("create: {c}: {message}")}));
+            Event::Failed {
+                req: r,
+                code: c,
+                message,
+            } if r == req => {
+                println!(
+                    "{}",
+                    json!({"role": "host", "error": format!("create: {c}: {message}")})
+                );
                 std::process::exit(1);
             }
-            Event::Message { from, reliable, bytes } => {
+            Event::Message {
+                from,
+                reliable,
+                bytes,
+            } => {
                 echoed += 1;
                 e.send(from, reliable, bytes);
             }
-            Event::PathChanged { mid, from, to, rtt } => {
-                switches.push(json!({"t_ms": ms(t0), "mid": mid, "from": from, "to": to, "rtt": rtt}))
-            }
+            Event::PathChanged { mid, from, to, rtt } => switches
+                .push(json!({"t_ms": ms(t0), "mid": mid, "from": from, "to": to, "rtt": rtt})),
             _ => {}
         }
     }
@@ -282,7 +353,10 @@ fn member(a: &Args) {
     let mut join_ms = None;
     let mut cur: Option<PathId> = None;
     let mut switches: Vec<Value> = Vec::new();
-    let mut acc: BTreeMap<PathId, PathAcc> = PathId::ALL.iter().map(|p| (*p, PathAcc::default())).collect();
+    let mut acc: BTreeMap<PathId, PathAcc> = PathId::ALL
+        .iter()
+        .map(|p| (*p, PathAcc::default()))
+        .collect();
     // seq -> (sent at ms, path at send)
     let mut sent_at: Vec<(f64, Option<PathId>)> = Vec::new();
     let mut got: HashSet<u32> = HashSet::new();
@@ -348,7 +422,11 @@ fn member(a: &Args) {
         }
         if let Some(h) = host {
             if now >= next_send {
-                next_send = if next_send == 0.0 { now + period } else { next_send + period };
+                next_send = if next_send == 0.0 {
+                    now + period
+                } else {
+                    next_send + period
+                };
                 let mut b = vec![UNREL];
                 b.extend_from_slice(&seq.to_le_bytes());
                 b.extend_from_slice(&now.to_le_bytes());
@@ -393,7 +471,11 @@ fn member(a: &Args) {
                     host = Some(room.host);
                     join_ms = Some(ms(t0));
                 }
-                Event::Failed { req: r, code: c, message } if r == req => {
+                Event::Failed {
+                    req: r,
+                    code: c,
+                    message,
+                } if r == req => {
                     errors.push(format!("join: {c}: {message}"));
                 }
                 Event::PeerConnected { path, .. } => {
@@ -522,8 +604,17 @@ fn member(a: &Args) {
         });
         let window_end = restore_at_ms.unwrap_or(end_ms);
         let mut gap = 0f64;
-        let mut prev = echo_times.iter().copied().filter(|t| *t <= h).last().unwrap_or(h);
-        for t in echo_times.iter().copied().filter(|t| *t > h && *t <= window_end) {
+        let mut prev = echo_times
+            .iter()
+            .copied()
+            .filter(|t| *t <= h)
+            .last()
+            .unwrap_or(h);
+        for t in echo_times
+            .iter()
+            .copied()
+            .filter(|t| *t > h && *t <= window_end)
+        {
             gap = gap.max(t - prev);
             prev = t;
         }

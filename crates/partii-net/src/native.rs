@@ -632,7 +632,7 @@ async fn peer(
     let closed = |io: &async_channel::Sender<Io>| {
         let _ = io.try_send(Io::PcClosed { mid, path, gen });
     };
-    let servers: Vec<RTCIceServer> = ice
+    let mut servers: Vec<RTCIceServer> = ice
         .iter()
         .map(|s| RTCIceServer {
             urls: s.urls.clone(),
@@ -640,6 +640,32 @@ async fn peer(
             credential: s.credential.clone().unwrap_or_default(),
         })
         .collect();
+    // webrtc-rs relays over UDP only: give the TURN path a TLS bridge to the
+    // server's `turns:` URL on 443 too (crate::turn_tls), so it still opens
+    // where UDP is blocked. ICE takes whichever relay answers first.
+    let mut bridges = Vec::new();
+    if relay_only {
+        for s in &ice {
+            let tls443 = s
+                .urls
+                .iter()
+                .find(|u| {
+                    u.starts_with("turns:")
+                        && crate::turn_tls::parse_turns(u).is_some_and(|(_, p)| p == 443)
+                })
+                .or_else(|| s.urls.iter().find(|u| u.starts_with("turns:")));
+            if let Some(u) = tls443 {
+                if let Some(b) = crate::turn_tls::start(u).await {
+                    servers.push(RTCIceServer {
+                        urls: vec![b.url.clone()],
+                        username: s.username.clone().unwrap_or_default(),
+                        credential: s.credential.clone().unwrap_or_default(),
+                    });
+                    bridges.push(b);
+                }
+            }
+        }
+    }
     let policy = if relay_only {
         RTCIceTransportPolicy::Relay
     } else {
@@ -814,6 +840,7 @@ async fn peer(
         }
     }
     let _ = pc.close().await;
+    drop(bridges);
     closed(&io);
 }
 
@@ -864,6 +891,8 @@ fn selected_pair(report: &RTCStatsReport) -> Value {
                     "protocol": c.protocol,
                     "relay_protocol": serde_json::to_value(&c.relay_protocol).unwrap_or(Value::Null),
                     "url": c.url,
+                    // A relay reached through crate::turn_tls (TURN over TLS 443).
+                    "tls_bridge": c.url.contains("127.0.0.1"),
                 })),
                 _ => None,
             })

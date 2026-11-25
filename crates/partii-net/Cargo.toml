@@ -25,11 +25,12 @@ thiserror.workspace = true
 
 [features]
 default = ["native"]
-native = ["dep:tokio", "dep:tokio-tungstenite", "dep:webrtc", "dep:async-channel", "dep:bytes", "dep:async-trait", "dep:futures-util"]
+native = ["dep:tokio", "dep:tokio-tungstenite", "dep:webrtc", "dep:async-channel", "dep:bytes", "dep:async-trait", "dep:futures-util", "dep:tokio-rustls", "dep:webpki-roots"]
 
 [dependencies.tokio]
 workspace = true
 optional = true
+features = ["io-util"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
@@ -38,6 +39,9 @@ async-channel = { version = "2", optional = true }
 bytes = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
+# TURN over TLS (src/turn_tls.rs); the same rustls/ring the session socket uses.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
 log = "0.4"
 getrandom = "0.3"
 

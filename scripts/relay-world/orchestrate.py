@@ -144,6 +144,21 @@ def destroy_all():
     return left
 
 
+def parse_result(out):
+    """A finished probe's JSON (dict), an error string, or None (not done yet)."""
+    lines = [l for l in (out or "").splitlines() if l.strip()]
+    if not lines or lines[-1].strip() == "WAIT":
+        return None
+    for l in reversed(lines):
+        l = l.strip()
+        if l.startswith("{"):
+            try:
+                return json.loads(l)
+            except json.JSONDecodeError:
+                break
+    return f"no JSON from the probe: {(out or '')[-300:]}"
+
+
 def run_probe(region, label, args, secs):
     """Start net-probe on a machine and wait for its JSON."""
     cmd = "probe.sh " + shlex.quote(label) + " " + " ".join(shlex.quote(a) for a in args)
@@ -153,12 +168,10 @@ def run_probe(region, label, args, secs):
     deadline = time.time() + secs + 40
     while time.time() < deadline:
         time.sleep(4)
-        out, err = exec_on(region, f"sh -c 'test -f /tmp/{label}.done && cat /tmp/{label}.json'", timeout=20)
-        if out and out.strip():
-            try:
-                return json.loads(out.strip().splitlines()[-1])
-            except json.JSONDecodeError:
-                return {"region": region, "label": label, "errors": [f"bad json: {out[-300:]}"]}
+        out, err = exec_on(region, f"sh -c 'if test -f /tmp/{label}.done; then cat /tmp/{label}.json; else echo WAIT; fi'", timeout=20)
+        got = parse_result(out)
+        if got is not None:
+            return got if isinstance(got, dict) else {"region": region, "label": label, "errors": [got]}
     tail, _ = exec_on(region, f"sh -c 'tail -c 600 /tmp/{label}.log'", timeout=20)
     return {"region": region, "label": label, "errors": [f"no result in {secs + 40}s", tail or ""]}
 
@@ -196,12 +209,10 @@ def subrun(case, host_region, members, mode, secs, extra=(), host_extra_secs=30)
 def run_probe_result(region, label, secs):
     deadline = time.time() + secs + 20
     while time.time() < deadline:
-        out, _ = exec_on(region, f"sh -c 'test -f /tmp/{label}.done && cat /tmp/{label}.json'", timeout=20)
-        if out and out.strip():
-            try:
-                return json.loads(out.strip().splitlines()[-1])
-            except json.JSONDecodeError:
-                return {"errors": ["bad host json"]}
+        out, _ = exec_on(region, f"sh -c 'if test -f /tmp/{label}.done; then cat /tmp/{label}.json; else echo WAIT; fi'", timeout=20)
+        got = parse_result(out)
+        if got is not None:
+            return got if isinstance(got, dict) else {"errors": [got]}
         time.sleep(4)
     return {"errors": ["host result timed out"]}
 
@@ -288,7 +299,8 @@ def analyse(runs, regions, cap_s):
             turn_open = bool(t and p(t, "turn", "samples"))
             row = {"region": r, "udp_blocked": bool(t and t.get("udp_blocked")),
                    "turn_opened": turn_open, "turn_p50": p(t, "turn") if t else None,
-                   "turn_ice": p(t, "turn", "ice") if t else None,
+                   "turn_tls": bool(((p(t, "turn", "ice") or {}).get("local") or {}).get("tls_bridge")) if t else None,
+                   "turn_open_ms": p(t, "turn", "open_ms") if t else None,
                    "auto_final": a.get("final_path") if a else None, "auto_p50": (a or {}).get("overall", {}).get("p50"),
                    "ws_p50_open_net": ws_ref.get(r)}
             rows.append(row)
@@ -321,8 +333,11 @@ def analyse(runs, regions, cap_s):
                 if row["before"] in (None, "ws"):
                     fails.append(f"{r}: was on {row['before']} before the blackhole (nothing to fail over)")
                     continue
-                if row["switched_to"] != "ws":
-                    fails.append(f"{r}: switched to {row['switched_to']}, not ws")
+                # App blackhole kills turn + direct: ws is the only way out. An
+                # iptables UDP drop leaves TURN over TLS (TCP 443) alive too.
+                ok_to = ("ws",) if case == "c" else ("ws", "turn")
+                if row["switched_to"] not in ok_to:
+                    fails.append(f"{r}: switched to {row['switched_to']}, not {' or '.join(ok_to)}")
                 if row["play_gap_ms"] is None or row["play_gap_ms"] > 1000:
                     fails.append(f"{r}: play gap {row['play_gap_ms']} ms > 1000")
                 if row["rel_missing"] or row["rel_out_of_order"]:
