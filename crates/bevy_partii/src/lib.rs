@@ -154,6 +154,10 @@ pub struct Rooms {
 #[cfg(feature = "net")]
 impl Rooms {
     /// Create a room; its code arrives in a `Created` event. Returns the request id.
+    /// The room is a star (members link to the host only; a member's
+    /// `BROADCAST` reaches the host). For a mesh, where members send to each
+    /// other directly, call `engine().create_with(..)` with
+    /// `partii_net::Topology::Mesh.settings()` merged into the settings.
     pub fn create(&self, max_members: u32, name: &str) -> u32 {
         let mut settings = serde_json::json!({ "max_members": max_members });
         if let Some(v) = &self.net_version {

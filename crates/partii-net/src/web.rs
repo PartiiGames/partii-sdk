@@ -614,6 +614,7 @@ impl WebEngine {
     }
 
     /// `create` with room settings as JSON, e.g. `{"max_members":32,"kinds":{"game":{"joinable":false}},"away_grace_ms":60000}`.
+    /// Rooms are a star (members link to the host only) unless the settings say `"topology":"mesh"`.
     #[wasm_bindgen(js_name = createWith)]
     pub fn create_with(
         &self,

@@ -977,6 +977,9 @@ struct Party {
     ever: BTreeSet<(u16, u16)>,
     host: u16,
     now: f64,
+    /// Members on an engine from before topologies: they never announce
+    /// (their `{"pc": "net"}` signals are dropped) and always mesh.
+    old: BTreeSet<u16>,
 }
 
 fn member_json(mid: u16) -> Value {
@@ -991,6 +994,7 @@ impl Party {
             ever: BTreeSet::new(),
             host: 1,
             now: 0.0,
+            old: BTreeSet::new(),
         }
     }
     fn mids(&self) -> Vec<u16> {
@@ -1044,6 +1048,9 @@ impl Party {
                                 continue;
                             };
                             if v["t"] == "signal" {
+                                if self.old.contains(me) && v["data"]["pc"] == "net" {
+                                    continue;
+                                }
                                 let to = v["to"].as_u64().unwrap() as u16;
                                 deliver.push((
                                     to,
@@ -1150,12 +1157,92 @@ fn assert_star(p: &Party) {
     assert!(pairs.iter().all(|(a, b)| *a == host || *b == host));
 }
 
+/// The party with a host on an old engine: it meshes and never announces.
+fn old_host_party(members: Option<Topology>) -> Party {
+    let mut p = Party::new();
+    p.old.insert(1);
+    p.add(Some(Topology::Mesh));
+    for _ in 0..7 {
+        p.add(members);
+    }
+    p
+}
+
 #[test]
 fn a_mesh_links_every_pair() {
-    let p = party(None, None);
+    let p = party(Some(Topology::Mesh), None);
     assert_eq!(p.pc_pairs().len(), 8 * 7 / 2);
     assert_eq!(p.cores[&5].topology(), Topology::Mesh);
     assert_eq!(p.links(5).len(), 7);
+}
+
+#[test]
+fn explicit_mesh_everywhere_still_meshes() {
+    let p = party(Some(Topology::Mesh), Some(Topology::Mesh));
+    assert_eq!(p.pc_pairs().len(), 8 * 7 / 2);
+    assert!(p.cores.values().all(|c| c.topology() == Topology::Mesh));
+    assert_eq!(p.cores[&3].stats()["topology"], "mesh");
+}
+
+#[test]
+fn a_plain_create_is_a_star_and_announces_it() {
+    let mut c = core(false);
+    online(&mut c, "turn");
+    let id = c.create("g", Some(8), "game", "", Value::Null);
+    let sent = c.drain();
+    // The create itself carries no topology (the edge never needed one).
+    assert!(sent.iter().any(|a| matches!(a, Action::SendText(t)
+        if t.contains("\"create\"") && !t.contains("topology"))));
+    let mut r = room(1, &[1]);
+    r["host"] = json!(1);
+    c.on_text(&json!({"t": "ok", "id": id, "room": r}).to_string(), 0.0);
+    assert_eq!(c.topology(), Topology::Star);
+    c.drain();
+    c.on_text(
+        &json!({"t": "member_joined", "member": member_json(2)}).to_string(),
+        1.0,
+    );
+    let announced = c.drain().into_iter().any(|a| match a {
+        Action::SendText(t) => {
+            let v: Value = serde_json::from_str(&t).unwrap_or(Value::Null);
+            v["t"] == "signal"
+                && v["to"] == 2
+                && v["data"] == json!({"pc": "net", "topology": "star"})
+        }
+        _ => false,
+    });
+    assert!(announced, "the host tells the new member it's a star");
+    assert_eq!(Topology::default(), Topology::Star);
+}
+
+#[test]
+fn by_default_the_whole_party_is_a_star() {
+    let p = party(None, None);
+    assert_star(&p);
+    assert_eq!(p.non_host_pcs_ever(), 0);
+}
+
+#[test]
+fn members_of_a_silent_old_host_mesh_after_the_wait() {
+    let mut p = old_host_party(None);
+    p.run_to(TOPOLOGY_WAIT_MS - 200.0);
+    // Holding: only links to the host so far.
+    assert_eq!(p.non_host_pcs_ever(), 0);
+    assert!(p.cores.values().all(|c| c.topology() == Topology::Mesh));
+    p.run_to(TOPOLOGY_WAIT_MS + 1_000.0);
+    assert_eq!(p.pc_pairs().len(), 8 * 7 / 2, "the room meshes, as old hosts expect");
+    assert_eq!(p.links(5).len(), 7);
+}
+
+#[test]
+fn an_explicit_star_member_keeps_its_choice_with_an_old_host() {
+    let mut p = old_host_party(None);
+    // One member that asked for a star, among plain ones.
+    let s = p.add(Some(Topology::Star));
+    p.run_to(TOPOLOGY_WAIT_MS + 1_000.0);
+    assert_eq!(p.cores[&s].topology(), Topology::Star);
+    assert_eq!(p.links(s), vec![1]);
+    assert_eq!(p.cores[&4].topology(), Topology::Mesh);
 }
 
 #[test]
@@ -1183,7 +1270,7 @@ fn members_follow_the_hosts_star_whatever_they_asked_for() {
 
 #[test]
 fn members_asking_for_a_star_follow_a_mesh_host() {
-    let p = party(None, Some(Topology::Star));
+    let p = party(Some(Topology::Mesh), Some(Topology::Star));
     assert_eq!(p.pc_pairs().len(), 8 * 7 / 2);
     assert!(p.cores.values().all(|c| c.topology() == Topology::Mesh));
 }
@@ -1215,7 +1302,7 @@ fn a_star_rebuilds_around_a_new_host() {
 
 #[test]
 fn the_host_can_switch_a_running_room_to_a_star() {
-    let mut p = party(None, None);
+    let mut p = party(Some(Topology::Mesh), None);
     assert_eq!(p.pc_pairs().len(), 28);
     p.cores
         .get_mut(&1)
@@ -1243,9 +1330,10 @@ fn a_topology_on_the_rooms_view_wins_at_once() {
 }
 
 #[test]
-fn without_an_announcement_a_member_keeps_its_own_choice_after_the_wait() {
-    // An old host announces nothing. A mesh member holds its member-to-member
-    // offers for TOPOLOGY_WAIT_MS, then builds them; the host link starts at once.
+fn without_an_announcement_a_member_meshes_or_keeps_its_own_choice_after_the_wait() {
+    // An old host announces nothing. A member with no choice holds its
+    // member-to-member offers for TOPOLOGY_WAIT_MS, then meshes (as old hosts
+    // expect); the host link starts at once.
     let mut c = core(false);
     online(&mut c, "turn");
     let id = c.join("ABCDE", "game", "", Value::Null);

@@ -21,24 +21,29 @@ const PC_RETRY_MS: [f64; 5] = [1000.0, 2000.0, 4000.0, 8000.0, 10000.0];
 const PC_OPEN_TIMEOUT_MS: f64 = 12_000.0;
 pub use partii_protocol::room::{BROADCAST, RELAY_BUNDLE, RELAY_FRAME};
 /// A member that joined a room it did not create holds its non-host WebRTC
-/// paths this long for the host's topology announcement (see [`Topology`]);
-/// an old host never sends one, and then the member's own choice stands.
+/// paths this long for the host's topology announcement (see [`Topology`]).
+/// An old host never sends one: then a member that asked for a topology
+/// keeps it, and one that didn't meshes (what old hosts expect).
 pub const TOPOLOGY_WAIT_MS: f64 = 2_000.0;
 
 /// Which members of a room link to each other. Set by the game in the
-/// `create_with` / `join_with` settings (`{"topology": "star"}`) or a host's
-/// `update`; anything else (or nothing) is [`Topology::Mesh`].
+/// `create_with` / `join_with` settings (`{"topology": "mesh"}` or
+/// `"star"`) or a host's `update`; a room created with no `topology` is a
+/// [`Topology::Star`].
 ///
-/// - `Mesh` (the default, unchanged): every member links to every other.
-/// - `Star`: members link only to the room's host (`room.host`); the host
-///   links to everyone. A room of `n` has `n - 1` links instead of
-///   `n (n - 1) / 2`, and each non-host keeps exactly one.
+/// - `Star` (the default): members link only to the room's host
+///   (`room.host`); the host links to everyone. A room of `n` has `n - 1`
+///   links instead of `n (n - 1) / 2`, and each non-host keeps exactly one.
+/// - `Mesh`: every member links to every other. Pick it for games where
+///   non-hosts talk to each other directly (`{"topology": "mesh"}`).
 ///
 /// The room's creator decides. Its engine announces the topology to every
 /// member over signaling (`signal` data `{"pc": "net", "topology": ..}`,
 /// which older engines ignore); members follow it whatever they asked for.
-/// A `topology` field on the edge's room view, once the edge carries one,
-/// wins over both.
+/// A host on an older engine never announces (and always meshes): after
+/// [`TOPOLOGY_WAIT_MS`] a member that asked for nothing meshes, and one that
+/// asked for a topology keeps it. A `topology` field on the edge's room
+/// view, once the edge carries one, wins over all of these.
 ///
 /// In a star, a non-host sending to another non-host has no link to send
 /// on: the send is dropped and an [`Event::Error`] says so (once per member
@@ -47,8 +52,8 @@ pub const TOPOLOGY_WAIT_MS: f64 = 2_000.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Topology {
-    #[default]
     Mesh,
+    #[default]
     Star,
 }
 
@@ -66,6 +71,10 @@ impl Topology {
         } else {
             Topology::Mesh
         }
+    }
+    /// A game's setting: missing or `null` is no choice (`None`).
+    fn choice(v: &Value) -> Option<Topology> {
+        (!v.is_null()).then(|| Topology::parse(v))
     }
     /// The settings object for `create_with` / `join_with`: `{"topology": "star"}`.
     pub fn settings(self) -> Value {
@@ -340,8 +349,9 @@ pub struct Core {
     last_ping: f64,
     /// This engine's own away hold (an `away` the edge took), until it's back.
     away: Option<Away>,
-    /// The topology the game asked for with its last create/join.
-    want: Topology,
+    /// The topology the game asked for with its last create/join (`None`:
+    /// no choice; a creator then makes a star, a member follows its host).
+    want: Option<Topology>,
     /// The room's topology as this engine follows it.
     topology: Topology,
     /// Known for sure (we created the room, the room says, or the host
@@ -378,7 +388,7 @@ impl Core {
             last_rx: 0.0,
             last_ping: 0.0,
             away: None,
-            want: Topology::Mesh,
+            want: None,
             topology: Topology::Mesh,
             settled: false,
             entered_at: 0.0,
@@ -523,6 +533,7 @@ impl Core {
         self.create_with(game, kind, name, meta, json!({"max_members": max_members}))
     }
     /// `create` with room settings from the start: `{"max_members": 32, "kinds": {"game": {"joinable": false}}}`.
+    /// No `topology` makes a star ([`Topology`]); `{"topology": "mesh"}` links every member to every other.
     /// `away_grace_ms` (5000–300000, default 30000) sets how long an away member keeps its seat.
     pub fn create_with(
         &mut self,
@@ -532,7 +543,7 @@ impl Core {
         meta: Value,
         settings: Value,
     ) -> u32 {
-        self.want = Topology::parse(&settings["topology"]);
+        self.want = Topology::choice(&settings["topology"]);
         let mut v = json!({"t": "create", "game": game, "kind": kind, "name": name, "meta": meta});
         if let Value::Object(o) = settings {
             for (k, x) in o {
@@ -556,7 +567,7 @@ impl Core {
         meta: Value,
         settings: Value,
     ) -> u32 {
-        self.want = Topology::parse(&settings["topology"]);
+        self.want = Topology::choice(&settings["topology"]);
         let mut v = json!({"t": "join", "code": code, "kind": kind, "name": name, "meta": meta});
         if let Value::Object(o) = settings {
             for (k, x) in o {
@@ -574,12 +585,13 @@ impl Core {
     }
     /// Host only: change the room, e.g. `{"joinable": false}` or
     /// `{"away_grace_ms": 60000}` (holds already running keep their end).
-    /// The host may also switch the topology: `{"topology": "star"}` (a host
-    /// whose page reloaded as a fresh engine is back on a mesh until it does).
+    /// The host may also switch the topology: `{"topology": "star"}` or
+    /// `"mesh"` (a host whose page reloaded as a fresh engine and resumed its
+    /// room is on a mesh, which links everyone, until it does).
     pub fn update(&mut self, patch: Value) -> u32 {
         if !patch["topology"].is_null() && self.is_host() {
-            self.want = Topology::parse(&patch["topology"]);
-            self.topology = self.want;
+            self.topology = Topology::parse(&patch["topology"]);
+            self.want = Some(self.topology);
             self.settled = true;
             self.announce_all();
             self.reconcile(self.clock);
@@ -709,8 +721,9 @@ impl Core {
         self.clock = now;
         self.pump_queued(Some(now));
         if !self.settled && self.room.is_some() && now - self.entered_at >= TOPOLOGY_WAIT_MS {
-            // No announcement (an old host): our own choice stands.
-            self.settle(self.want, now);
+            // No announcement: an old host, which meshes. A member that
+            // asked for a topology keeps it; one that didn't meshes too.
+            self.settle(self.want.unwrap_or(Topology::Mesh), now);
         }
         if matches!(self.sock, Sock::Up | Sock::Hello) {
             if now - self.last_rx > SOCK_DEAD_MS {
@@ -1031,7 +1044,9 @@ impl Core {
                 if self.room.is_none() {
                     // A fresh engine on an old session: learn the room and its members.
                     self.room = Some(room.clone());
-                    self.entered(Topology::Mesh, &m["room"], now);
+                    // It never asked for a topology; a mesh links
+                    // everyone either way (a host follows up with `update`).
+                    self.entered(Some(Topology::Mesh), &m["room"], now);
                     let others: Vec<u16> = room
                         .members
                         .iter()
@@ -1450,15 +1465,19 @@ impl Core {
     }
 
     /// Just came into a room (created, joined, or a fresh engine resuming).
-    fn entered(&mut self, want: Topology, raw: &Value, now: f64) {
+    fn entered(&mut self, want: Option<Topology>, raw: &Value, now: f64) {
         self.entered_at = now;
         self.refused.clear();
-        self.topology = want;
+        // Until the host announces, a member without a choice holds a mesh
+        // (its member-to-member offers wait; see `pc_timers`).
+        self.topology = want.unwrap_or(Topology::Mesh);
         self.settled = false;
         if let Some(t) = raw.get("topology").filter(|t| !t.is_null()) {
             self.topology = Topology::parse(t);
             self.settled = true;
         } else if self.is_host() {
+            // The creator decides: a star unless the game asked for a mesh.
+            self.topology = want.unwrap_or(Topology::Star);
             self.settled = true;
         } else if let Some((from, t)) = self.early_announce.take() {
             if self.room.as_ref().is_some_and(|r| r.host == from) {

@@ -36,18 +36,18 @@ match ev {
 - `WebEngine.auth(token)` (a string, or `null` to sign out) returns the request id; the reply is an `authed` or `auth_failed` event in `poll()`. `bevy_partii`'s `Rooms::auth` wraps it too.
 - After signing in, a host may list its room friends-only (`update` with `meta.listing.visibility: "friends"`). Protocol: <https://partii.games/docs/PROTOCOL.md> ("Signing in on a live connection").
 
-## Topology: mesh or star (host-only links)
+## Topology: star (host-only links) or mesh
 
-By default a room is a **mesh**: every member links to every other (a WebRTC connection per pair, TURN and direct). A room where only the host link carries play (a host screen with phone controllers) can be a **star** instead: each member links only to the room's host (`room.host`, the member that created it) and the host links to everyone. A room of `n` keeps `n - 1` links instead of `n (n - 1) / 2`: a host, six phones and a guest go from 28 peer connections to 7, and each phone keeps one.
+By default a room is a **star**: each member links only to the room's host (`room.host`, the member that created it) and the host links to everyone. A room of `n` keeps `n - 1` links instead of `n (n - 1) / 2`: a host, six phones and a guest go from 28 peer connections to 7, and each phone keeps one. A game where non-hosts talk to each other directly picks a **mesh** instead: every member links to every other (a WebRTC connection per pair, TURN and direct).
 
 ```rust
 use partii_net::Topology;
 // The host picks it when it creates the room (merge it into any other settings):
-engine.create_with("tankii", "game", "Host", meta, json!({"max_members": 8, "topology": "star"}));
-// or Topology::Star.settings() for just {"topology": "star"}.
+engine.create_with("mygame", "game", "Host", meta, json!({"max_members": 8, "topology": "mesh"}));
+// or Topology::Mesh.settings() for just {"topology": "mesh"}. No topology: a star.
 ```
 
-- **The creator decides.** Its engine tells every member the room's topology over signaling as it links to them, and members follow it whatever they asked for: a phone page that calls plain `join` becomes a star member of a star room, and a member that asked for a star in a mesh room meshes. Members hold their member-to-member links (not the host link) until they hear it, at most `TOPOLOGY_WAIT_MS` (2 s); a host on an older SDK says nothing, and then each member's own choice stands. A `topology` field on the room itself (when partii's edge carries one) wins at once.
+- **The creator decides.** Its engine tells every member the room's topology over signaling as it links to them, and members follow it whatever they asked for: a phone page that calls plain `join` becomes a star member of a star room, and a member that asked for a star in a mesh room meshes. Members hold their member-to-member links (not the host link) until they hear it, at most `TOPOLOGY_WAIT_MS` (2 s); a host on an older SDK says nothing (and always meshes), and then a member that asked for no topology meshes with it, while one that asked for one keeps it. A `topology` field on the room itself (when partii's edge carries one) wins at once.
 - **Sends in a star.** A member's `BROADCAST` reaches the host only. A send from a member to another member has no link to go on: it is dropped and `Event::Error` says so (once per member per room). Send to the host and have the game forward it. The host sends to anyone.
 - **Switching.** The host can switch a running room with `update(json!({"topology": "star"}))` (or `"mesh"`); members follow. A host page that reloads as a fresh engine is back on a mesh until it sends that update.
 - **Host migration.** partii's edge doesn't migrate hosts: when the host leaves, the room closes (`RoomClosed { reason: "host_left" }`, or `"host_lost"` while it may reclaim the code). Should a room ever name a new host (`room_updated` with another `host`), the star rebuilds around it: the new host links to everyone, the others to it only.
