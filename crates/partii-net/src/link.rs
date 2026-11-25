@@ -57,6 +57,15 @@ pub const WS_PENALTY_MS: f64 = 25.0;
 /// pong plus jitter. Until it answers again (or `DEAD_MS` fails it over),
 /// play rides the ws relay, so a dead path costs ~0.4 s of play, not 1 s+.
 pub const SUSPECT_MS: f64 = 400.0;
+/// A path that stalls now and then (phone Wi-Fi, LTE handoffs) earns a
+/// longer suspect window: the longest recent gap between its pongs plus
+/// this margin (one more ping, so a lost pong after a stall is covered), up
+/// to `SUSPECT_MAX_MS`. The peak decays by `GAP_PEAK_DECAY` per pong (to
+/// ~60% after a minute without stalls), so a steady path goes back to
+/// `SUSPECT_MS`.
+pub const SUSPECT_MARGIN_MS: f64 = 250.0;
+pub const SUSPECT_MAX_MS: f64 = 900.0;
+pub const GAP_PEAK_DECAY: f64 = 0.998;
 
 const PING: u8 = 0x10;
 const PONG: u8 = 0x11;
@@ -74,6 +83,8 @@ pub struct PathState {
     ping_seq: u32,
     pub pings: u64,
     pub pongs: u64,
+    /// The longest recent gap between pongs (ms), decaying (`GAP_PEAK_DECAY`).
+    pub gap_peak: f64,
 }
 
 impl PathState {
@@ -199,6 +210,7 @@ impl Link {
         } else {
             s.last_pong = None;
             s.rtt = None;
+            s.gap_peak = 0.0;
         }
         self.select(now);
     }
@@ -234,6 +246,9 @@ impl Link {
                 let sample = (now - sent).max(0.0);
                 let s = self.path_mut(p);
                 s.pongs += 1;
+                if let Some(prev) = s.last_pong {
+                    s.gap_peak = (now - prev).max(s.gap_peak * GAP_PEAK_DECAY);
+                }
                 s.last_pong = Some(now);
                 s.rtt = Some(match s.rtt {
                     None => sample,
@@ -322,14 +337,26 @@ impl Link {
         out
     }
 
-    /// Is the current WebRTC path quiet past `SUSPECT_MS`?
+    /// How long the current path may stay quiet before play takes a
+    /// stand-in: `SUSPECT_MS` on a steady path, longer on one that has been
+    /// stalling (its recent pong-gap peak plus a margin).
+    pub fn suspect_after(&self) -> f64 {
+        let peak = self.path(self.current).gap_peak;
+        if peak <= PING_MS + 100.0 {
+            SUSPECT_MS
+        } else {
+            (peak + SUSPECT_MARGIN_MS).clamp(SUSPECT_MS, SUSPECT_MAX_MS)
+        }
+    }
+
+    /// Is the current WebRTC path quiet past `suspect_after`?
     pub fn suspect(&self, now: f64) -> bool {
         let cur = self.current;
         cur != PathId::Ws
             && self
                 .path(cur)
                 .last_pong
-                .is_some_and(|t| now - t > SUSPECT_MS)
+                .is_some_and(|t| now - t > self.suspect_after())
     }
 
     /// While the current path is suspect: the path that carries play
@@ -481,6 +508,15 @@ mod tests {
         now: f64,
         got_a: Vec<LinkEvent>,
         got_b: Vec<LinkEvent>,
+        /// Per path: windows (start, end) in which packets stall and are
+        /// all delivered at the end (a Wi-Fi / LTE hiccup), and a loss rate.
+        stalls: [Vec<(f64, f64)>; 3],
+        loss: [f64; 3],
+        rng: u64,
+        /// Detours: times a's play left its current path for a stand-in.
+        detour: bool,
+        detours: u32,
+        detour_ms: f64,
     }
 
     impl Sim {
@@ -494,7 +530,19 @@ mod tests {
                 now: 0.0,
                 got_a: vec![],
                 got_b: vec![],
+                stalls: Default::default(),
+                loss: [0.0; 3],
+                rng: 0x9E37_79B9_7F4A_7C15,
+                detour: false,
+                detours: 0,
+                detour_ms: 0.0,
             }
+        }
+        fn rand(&mut self) -> f64 {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            (self.rng >> 11) as f64 / (1u64 << 53) as f64
         }
         fn open(&mut self, p: PathId, open: bool) {
             self.up[p as usize] = open;
@@ -513,13 +561,32 @@ mod tests {
                     (false, self.b.poll(self.now)),
                 ] {
                     for (p, d) in out {
-                        if self.up[p as usize] {
-                            self.q.push((self.now + self.delay[p as usize], to_b, p, d));
+                        let i = p as usize;
+                        if !self.up[i] || (self.loss[i] > 0.0 && self.rand() < self.loss[i]) {
+                            continue;
                         }
+                        let mut at = self.now + self.delay[i];
+                        if let Some((_, e)) = self.stalls[i]
+                            .iter()
+                            .find(|(s, e)| *s <= self.now && self.now < *e)
+                        {
+                            at = at.max(*e + self.delay[i]);
+                        }
+                        self.q.push((at, to_b, p, d));
                     }
                 }
                 let now = self.now;
-                let (due, rest): (Vec<_>, Vec<_>) = self.q.drain(..).partition(|(t, ..)| *t <= now);
+                let on_detour = self.a.stand_in(now).is_some();
+                if on_detour {
+                    self.detour_ms += 2.0;
+                    if !self.detour {
+                        self.detours += 1;
+                    }
+                }
+                self.detour = on_detour;
+                let (mut due, rest): (Vec<_>, Vec<_>) =
+                    self.q.drain(..).partition(|(t, ..)| *t <= now);
+                due.sort_by(|x, y| x.0.total_cmp(&y.0));
                 self.q = rest;
                 for (_, to_b, p, d) in due {
                     if to_b {
@@ -659,6 +726,137 @@ mod tests {
         s.up[PathId::Direct as usize] = true;
         s.step(600.0);
         assert!(!s.a.suspect(s.now));
+    }
+
+    /// tankii's worry: a path that is alive but jittery (450 ms stalls every
+    /// 3-5 s, 2% loss: phone Wi-Fi, LTE handoffs) must not flip play to the
+    /// ws relay and back several times a minute. Two minutes of it.
+    fn jittery(sim: &mut Sim, p: PathId, from: f64, ms: f64) {
+        let mut t = from + 1000.0;
+        while t < from + ms {
+            sim.stalls[p as usize].push((t, t + 450.0));
+            t += 3000.0 + 2000.0 * sim.rand();
+        }
+        sim.loss[p as usize] = 0.02;
+    }
+
+    #[test]
+    fn a_jittery_but_alive_path_keeps_play() {
+        let mut s = Sim::new([60.0, 30.0, 20.0]);
+        s.open(PathId::Ws, true);
+        s.open(PathId::Direct, true);
+        s.step(3000.0);
+        assert_eq!(s.a.current(), PathId::Direct);
+        let t0 = s.now;
+        jittery(&mut s, PathId::Direct, t0, 120_000.0);
+        let stalls = s.stalls[PathId::Direct as usize].len();
+        let seen = s.got_a.len();
+        let mut sent = 0u32;
+        while s.now - t0 < 120_000.0 {
+            s.a.send(true, &sent.to_le_bytes());
+            sent += 1;
+            s.step(34.0);
+        }
+        s.step(3000.0);
+        let switches = s.got_a[seen..]
+            .iter()
+            .filter(|e| matches!(e, LinkEvent::Switched { .. }))
+            .count();
+        eprintln!(
+            "jitter: {stalls} stalls in 2 min -> {} detours ({:.0} ms on ws), {switches} switches",
+            s.detours, s.detour_ms
+        );
+        assert_eq!(s.a.current(), PathId::Direct);
+        assert!(switches == 0, "{switches} switches");
+        assert!(s.detours <= 2, "{} detours in 2 min", s.detours);
+        // Reliable data arrives complete and IN ORDER through all of it.
+        let want: Vec<Vec<u8>> = (0..sent).map(|i| i.to_le_bytes().to_vec()).collect();
+        assert_eq!(s.msgs_b(true), want);
+    }
+
+    /// A path that was jittery and then dies for real: play still reaches
+    /// the ws relay within the (longer) learned window.
+    #[test]
+    fn a_jittery_path_that_dies_still_fails_over_fast() {
+        let mut s = Sim::new([60.0, 30.0, 20.0]);
+        s.open(PathId::Ws, true);
+        s.open(PathId::Direct, true);
+        s.step(3000.0);
+        let t0 = s.now;
+        jittery(&mut s, PathId::Direct, t0, 20_000.0);
+        s.step(20_000.0);
+        assert_eq!(s.a.current(), PathId::Direct);
+        let window = s.a.suspect_after();
+        s.blackhole(PathId::Direct);
+        let t1 = s.now;
+        let before = s.msgs_b(false).len();
+        let mut first = None;
+        let mut i = 0u32;
+        while s.now - t1 < 2000.0 {
+            s.a.send(false, &i.to_le_bytes());
+            i += 1;
+            s.step(10.0);
+            if first.is_none() && s.msgs_b(false).len() > before {
+                first = Some(s.now - t1);
+            }
+        }
+        let gap = first.expect("play resumed");
+        eprintln!("jittery then dead: window {window:.0} ms, play resumed after {gap:.0} ms");
+        assert!(gap < 1000.0, "play resumed after {gap} ms");
+    }
+
+    /// The same over 10 seeds and 300 / 450 / 600 ms stalls (tankii's
+    /// 300-600 ms range). Prints detours and switches per minute.
+    #[test]
+    fn jitter_sweep_stays_under_one_detour_a_minute() {
+        for stall in [300.0, 450.0, 600.0] {
+            let (mut detours, mut switches) = (0u32, 0usize);
+            for seed in 1..=10u64 {
+                let mut s = Sim::new([60.0, 30.0, 20.0]);
+                s.rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                s.open(PathId::Ws, true);
+                s.open(PathId::Direct, true);
+                s.step(3000.0);
+                let t0 = s.now;
+                let mut t = t0 + 1000.0;
+                while t < t0 + 120_000.0 {
+                    s.stalls[PathId::Direct as usize].push((t, t + stall));
+                    t += 3000.0 + 2000.0 * s.rand();
+                }
+                s.loss[PathId::Direct as usize] = 0.02;
+                let seen = s.got_a.len();
+                let mut i = 0u32;
+                while s.now - t0 < 120_000.0 {
+                    s.a.send(true, &i.to_le_bytes());
+                    i += 1;
+                    s.step(34.0);
+                }
+                s.step(3000.0);
+                detours += s.detours;
+                switches += s.got_a[seen..]
+                    .iter()
+                    .filter(|e| matches!(e, LinkEvent::Switched { .. }))
+                    .count();
+                let want: Vec<Vec<u8>> = (0..i).map(|n| n.to_le_bytes().to_vec()).collect();
+                assert_eq!(
+                    s.msgs_b(true),
+                    want,
+                    "order kept, stall {stall} seed {seed}"
+                );
+            }
+            let (dpm, spm) = (detours as f64 / 20.0, switches as f64 / 20.0);
+            eprintln!(
+                "jitter sweep: {stall} ms stalls -> {dpm:.2} detours/min, {spm:.2} switches/min"
+            );
+            if stall < 500.0 {
+                assert!(
+                    dpm <= 1.0 && switches == 0,
+                    "{stall} ms: {dpm} detours/min, {switches} switches"
+                );
+            } else {
+                assert!(spm <= 1.0, "{stall} ms: {spm} switches/min");
+            }
+        }
     }
 
     #[test]
