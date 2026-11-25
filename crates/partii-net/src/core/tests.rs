@@ -1313,6 +1313,62 @@ fn the_host_can_switch_a_running_room_to_a_star() {
 }
 
 #[test]
+fn a_fresh_host_resume_announces_mesh_then_update_makes_a_star() {
+    // A default (star) room whose host page reloads as a fresh engine.
+    let mut p = party(None, None);
+    assert_star(&p);
+    p.pcs.retain(|(a, b, _)| *a != 1 && *b != 1);
+    let mut c = core(false);
+    c.tick(p.now);
+    c.on_socket_open(p.now);
+    let ice = json!([{"urls": ["stun:s:3478", "turn:t:3478", "turns:t:443"], "username": "u", "credential": "p"}]);
+    c.on_text(
+        &json!({"t": "welcome", "resumed": true, "relay": "turn", "ice_servers": ice, "room": p.room_json(1)})
+            .to_string(),
+        p.now,
+    );
+    assert_eq!(c.topology(), Topology::Mesh);
+    // It tells every member the room is a mesh now.
+    let acts = c.drain();
+    let mut told: Vec<u16> = Vec::new();
+    for v in texts(&acts) {
+        if v["t"] == "signal" && v["data"]["pc"] == "net" {
+            assert_eq!(v["data"]["topology"], "mesh");
+            told.push(v["to"].as_u64().unwrap() as u16);
+        }
+    }
+    assert_eq!(told, (2..=8).collect::<Vec<u16>>());
+    let now = p.now;
+    for to in told {
+        p.cores.get_mut(&to).unwrap().on_text(
+            &json!({"t": "signal", "from": 1, "data": {"pc": "net", "topology": "mesh"}}).to_string(),
+            now,
+        );
+    }
+    // Its fresh peer connections to the members.
+    for a in &acts {
+        if let Action::CreatePc { mid, path, .. } = a {
+            p.pcs.insert((1, *mid, *path));
+        }
+    }
+    p.cores.insert(1, c);
+    p.pump();
+    p.run_to(now + 1_000.0);
+    assert!(p.cores.values().all(|c| c.topology() == Topology::Mesh));
+    assert_eq!(p.links(5).len(), 7, "members mesh with the resumed host");
+    assert_eq!(p.pc_pairs().len(), 8 * 7 / 2);
+
+    // The host asks for its star back: members go back to one link each.
+    p.cores
+        .get_mut(&1)
+        .unwrap()
+        .update(Topology::Star.settings());
+    p.pump();
+    p.run_to(p.now + 1_000.0);
+    assert_star(&p);
+}
+
+#[test]
 fn a_topology_on_the_rooms_view_wins_at_once() {
     let mut c = core(false);
     online(&mut c, "turn");
