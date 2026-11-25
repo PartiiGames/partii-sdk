@@ -17,8 +17,11 @@ const SOCK_PING_MS: f64 = 1000.0;
 const SOCK_DEAD_MS: f64 = 2500.0;
 const RECONNECT_BACKOFF_MS: [f64; 6] = [0.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0];
 const PC_RETRY_MS: [f64; 5] = [1000.0, 2000.0, 4000.0, 8000.0, 10000.0];
-/// A WebRTC path that has not opened by now is rebuilt.
-const PC_OPEN_TIMEOUT_MS: f64 = 12_000.0;
+/// A WebRTC path that has not opened by now is rebuilt. Opens take 1.5-5 s
+/// worldwide (relay-world, TURN over TLS included); a first attempt that
+/// stalls is better retried at 7 s than waited on for 12 (which also held
+/// recovery after an outage to one attempt per 12 s).
+const PC_OPEN_TIMEOUT_MS: f64 = 7_000.0;
 pub use partii_protocol::room::{BROADCAST, RELAY_BUNDLE, RELAY_FRAME};
 /// A member that joined a room it did not create holds its non-host WebRTC
 /// paths this long for the host's topology announcement (see [`Topology`]).

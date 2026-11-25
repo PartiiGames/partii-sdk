@@ -52,6 +52,11 @@ pub const LEAVE_WS_HOLD_MS: f64 = 250.0;
 /// rides TCP. Score it this much worse so play leaves it for any healthy
 /// WebRTC path that is not clearly slower.
 pub const WS_PENALTY_MS: f64 = 25.0;
+/// A WebRTC path that has not answered a ping for this long is suspect:
+/// pongs come every `PING_MS` while it is healthy, so this is one missed
+/// pong plus jitter. Until it answers again (or `DEAD_MS` fails it over),
+/// play rides the ws relay, so a dead path costs ~0.4 s of play, not 1 s+.
+pub const SUSPECT_MS: f64 = 400.0;
 
 const PING: u8 = 0x10;
 const PONG: u8 = 0x11;
@@ -278,6 +283,9 @@ impl Link {
             self.unrel.clear();
             return out;
         }
+        // A suspect WebRTC path keeps its pings (they tell when it is back)
+        // but play goes over the ws relay meanwhile.
+        let cur = self.stand_in(now).unwrap_or(cur);
         for b in self.unrel.drain(..) {
             let mut d = Vec::with_capacity(b.len() + 1);
             d.push(UNREL);
@@ -300,6 +308,39 @@ impl Link {
             out.push((cur, d));
         }
         out
+    }
+
+    /// Is the current WebRTC path quiet past `SUSPECT_MS`?
+    pub fn suspect(&self, now: f64) -> bool {
+        let cur = self.current;
+        cur != PathId::Ws
+            && self
+                .path(cur)
+                .last_pong
+                .is_some_and(|t| now - t > SUSPECT_MS)
+    }
+
+    /// While the current path is suspect: the path that carries play
+    /// instead (the best other path still answering, else the ws relay).
+    fn stand_in(&self, now: f64) -> Option<PathId> {
+        if !self.suspect(now) {
+            return None;
+        }
+        let score = |p: PathId| {
+            self.path(p).rtt.unwrap_or(f64::MAX) + if p == PathId::Ws { WS_PENALTY_MS } else { 0.0 }
+        };
+        PathId::ALL
+            .into_iter()
+            .filter(|p| *p != self.current && *p != PathId::Ws)
+            .filter(|p| {
+                self.path(*p).open
+                    && self
+                        .path(*p)
+                        .last_pong
+                        .is_some_and(|t| now - t <= SUSPECT_MS)
+            })
+            .min_by(|a, b| score(*a).total_cmp(&score(*b)))
+            .or_else(|| self.alive(PathId::Ws, now).then_some(PathId::Ws))
     }
 
     /// Can `p` carry traffic? A healthy path can. The ws relay can as soon
@@ -330,9 +371,21 @@ impl Link {
                     .total_cmp(&score(*b).unwrap_or(f64::MAX))
             });
         if !cur_ok {
-            // Fail over now: the best measured path, else the ws relay.
+            // Fail over now: the best measured path that is still answering,
+            // else the ws relay. A WebRTC path quiet past SUSPECT_MS usually
+            // died with the current one (same network): skip it rather than
+            // fail over twice.
+            let fresh = |p: PathId| {
+                p == PathId::Ws
+                    || self
+                        .path(p)
+                        .last_pong
+                        .is_some_and(|t| now - t <= SUSPECT_MS)
+            };
             let to = best
+                .filter(|p| fresh(*p))
                 .or_else(|| self.usable(PathId::Ws, now).then_some(PathId::Ws))
+                .or(best)
                 .filter(|p| *p != cur);
             if let Some(to) = to {
                 self.switch(to, now);
@@ -557,6 +610,34 @@ mod tests {
     }
 
     #[test]
+    fn play_moves_to_ws_while_the_current_path_is_suspect() {
+        let mut s = Sim::new([40.0, 20.0, 5.0]);
+        s.open(PathId::Ws, true);
+        s.open(PathId::Direct, true);
+        s.step(3000.0);
+        assert_eq!(s.a.current(), PathId::Direct);
+        s.blackhole(PathId::Direct);
+        let t0 = s.now;
+        let before = s.msgs_b(false).len();
+        let mut first = None;
+        let mut i = 0u32;
+        while s.now - t0 < 1500.0 {
+            s.a.send(false, &i.to_le_bytes());
+            i += 1;
+            s.step(10.0);
+            if first.is_none() && s.msgs_b(false).len() > before {
+                first = Some(s.now - t0);
+            }
+        }
+        let gap = first.expect("play resumed");
+        assert!(gap < 700.0, "play resumed after {gap} ms");
+        // A path that answers again takes play back without a switch.
+        s.up[PathId::Direct as usize] = true;
+        s.step(600.0);
+        assert!(!s.a.suspect(s.now));
+    }
+
+    #[test]
     fn falls_back_to_ws_when_every_webrtc_path_dies() {
         let mut s = Sim::new([40.0, 20.0, 5.0]);
         for p in PathId::ALL {
@@ -567,6 +648,16 @@ mod tests {
         s.blackhole(PathId::Turn);
         s.step(1500.0);
         assert_eq!(s.a.current(), PathId::Ws);
+        assert!(
+            !s.got_a.iter().any(|e| matches!(
+                e,
+                LinkEvent::Switched {
+                    to: PathId::Turn,
+                    ..
+                }
+            )),
+            "never fails over onto the silent TURN path on the way"
+        );
         s.a.send(true, b"still here");
         s.step(500.0);
         assert!(s.msgs_b(true).contains(&b"still here".to_vec()));

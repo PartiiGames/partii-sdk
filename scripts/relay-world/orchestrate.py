@@ -477,7 +477,8 @@ def main():
             save(runs)
             progress("c", host=h0)
         if "c_iptables" in cases:
-            runs.append(subrun("c_iptables", h0, members0, "auto", 60,
+            # 75 s: a real outage kills the pcs, so promoting back needs a rebuild.
+            runs.append(subrun("c_iptables", h0, members0, "auto", 75,
                                extra=["--blackhole", "webrtc", "--blackhole-mode", "iptables", "--blackhole-at", "20", "--restore-at", "35"]))
             save(runs)
             progress("c_iptables", host=h0)
@@ -489,7 +490,7 @@ def main():
     wall = time.time() - t0
     mh = MACHINE_SECONDS["total"] / 3600
     # ~30 Hz × 2 directions × ~120 B on the wire per member, plus pings.
-    member_secs = sum(len(r.get("members", [])) * (60 if r["case"].startswith("c") else a.secs) for r in runs)
+    member_secs = sum(len(r.get("members", [])) * (75 if r["case"].startswith("c") else a.secs) for r in runs)
     egress_gb = member_secs * 30 * 2 * 160 * 1.5 / 1e9
     cost = {"machine_hours": mh, "machines_usd": mh * MACHINE_USD_PER_HOUR, "egress_gb": egress_gb,
             "egress_usd": egress_gb * 0.04, "builder_usd": a.builder_usd}

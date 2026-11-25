@@ -560,7 +560,9 @@ async fn socket(
 ) {
     let conn = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio_tungstenite::connect_async(&url),
+        // No Nagle: relay frames are small and latency-bound; Nagle held
+        // each behind the previous one's ACK (delayed ACKs: up to ~40 ms).
+        tokio_tungstenite::connect_async_with_config(&url, None, true),
     )
     .await;
     let Ok(Ok((ws, _))) = conn else {
