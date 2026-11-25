@@ -9,7 +9,7 @@ Every SDK crate moves to 0.2.0 (one workspace version). Minor bump: new public f
   - **Dead window 1 to 2.5 s (at least 2 missed pongs).** Past it, play switches off the path for good: 1 s on a steady path, else its learned worst gap plus two pings.
   - **Promote hold 1.5 s, doubling up to 2 min.** Play goes back to a path that died only after it has answered for 1.5 s. Each further death within 3 min doubles the probation (10 s, 20 s... up to 2 min), and any other healthy path is preferred meanwhile.
   - **3 s settle after a stall.** Play does not leave a path that just stalled because another scores better for a moment.
-  - **pc open timeout 7 s** (was 4 s), so TURN over TLS has time to open.
+  - **pc open timeout 7 s** (was 12 s): a doomed attempt gives way to a fresh one sooner; TURN over TLS opens in 2.6-4.4 s.
   - **Rebuild a path that died every 1 s for 60 s, with a 4.5 s open timeout**, so play is back on WebRTC within ~7.5 s of the network returning (was up to ~29 s).
   - Reliable messages stay complete and in order through every switch (ARQ), on native and web (same `Link`).
   - Jitter (450 ms stalls, ~570 ms as measured, every 3-5 s): 0-0.86 switches/min on Fly where it was 5.6-19.
