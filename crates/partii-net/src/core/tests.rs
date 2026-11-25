@@ -1827,3 +1827,34 @@ fn net_stats_a_link_that_ends_goes_in_the_next_report() {
     // ws only: stuck on ws isn't said for an engine that never tries WebRTC.
     assert!(links.iter().all(|l| l.get("stuck_ws").is_none()));
 }
+
+#[test]
+fn net_stats_never_holds_up_leave() {
+    // In a room with a report due: leave goes out in the same drain, right after the
+    // final net_stats frame, and nothing waits on an answer to it.
+    let mut c = member_with_stats(Some(30_000));
+    run(&mut c, 0.0, 29_900.0);
+    let id = c.leave();
+    let acts = c.drain();
+    let sent = texts(&acts);
+    assert_eq!(sent.len(), 2);
+    assert_eq!((sent[0]["t"].as_str(), sent[0]["final"].as_bool()), (Some("net_stats"), Some(true)));
+    assert_eq!(sent[1]["t"], "leave");
+    assert_eq!(sent[1]["id"], id);
+    assert!(sent[0].get("id").is_none(), "net_stats is not a request: nothing waits for a reply");
+    assert!(c.room().is_none(), "out of the room at once, as before");
+    assert!(events(&acts).is_empty());
+    // No report is due later either: the links are gone with the room.
+    assert!(net_stats(&run(&mut c, 29_900.0, 70_000.0)).is_empty());
+
+    // The socket already gone (a phone quitting as its network drops): no net_stats is
+    // queued, and leave behaves exactly as it does without stats.
+    let mut d = member_with_stats(Some(30_000));
+    run(&mut d, 0.0, 5_000.0);
+    d.on_socket_closed(5_000.0);
+    d.drain();
+    let id = d.leave();
+    let acts = d.drain();
+    assert!(net_stats(&acts).is_empty());
+    assert!(matches!(&events(&acts)[..], [Event::Failed { req, code, .. }] if *req == id && code == "offline"));
+}
