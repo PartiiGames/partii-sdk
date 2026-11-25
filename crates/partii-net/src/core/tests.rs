@@ -1789,14 +1789,14 @@ fn a_join_gives_up_after_the_cap_and_never_retries_real_refusals() {
     let mut t = 0.0;
     for _ in 0..JOIN_RETRIES {
         c.on_text(&lost, t);
-        t += 10_000.0;
+        t += 1_000.0;
         c.tick(t);
         assert_eq!(texts(&c.drain()).len(), 1, "retried");
     }
     c.on_text(&lost, t);
     let evs = events(&c.drain());
     assert!(evs.iter().any(|e| matches!(e, Event::Failed { req, code, .. } if *req == id && code == "internal")));
-    c.tick(t + 10_000.0);
+    c.tick(t + 1_000.0);
     assert!(texts(&c.drain()).is_empty(), "no retry after the cap");
 
     // A refusal is not transient: straight to the game.
@@ -1804,6 +1804,6 @@ fn a_join_gives_up_after_the_cap_and_never_retries_real_refusals() {
     c.drain();
     c.on_text(&json!({"t": "err", "id": id, "code": "not_found", "message": "no room"}).to_string(), t);
     assert!(events(&c.drain()).iter().any(|e| matches!(e, Event::Failed { req, code, .. } if *req == id && code == "not_found")));
-    c.tick(t + 10_000.0);
+    c.tick(t + 1_000.0);
     assert!(texts(&c.drain()).is_empty());
 }
