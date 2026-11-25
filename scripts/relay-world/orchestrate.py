@@ -474,6 +474,21 @@ def main():
                 runs.append(subrun(case, host, members, mode, a.secs))
                 save(runs)
 
+        if "hops" in cases:
+            # Client -> Cloudflare colo: TCP connect time (one round trip) to
+            # the edge's host, 5 tries, and the colo that answered.
+            host = a.edge.split("//", 1)[-1].split("/", 1)[0]
+            hops = {}
+            for r in live:
+                o, err = exec_on(r, "sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null -w \"%{time_connect}\\n\" https://" + host + "/cdn-cgi/trace; done; curl -s https://" + host + "/cdn-cgi/trace | grep -E \"^colo=\"'", timeout=40)
+                lines = (o or "").split()
+                ts = sorted(float(x) * 1000 for x in lines if x.replace(".", "", 1).isdigit())
+                colo = next((x.split("=", 1)[1] for x in lines if x.startswith("colo=")), None)
+                hops[r] = {"connect_ms": ts, "p50": ts[len(ts) // 2] if ts else None, "colo": colo, "err": err}
+            with open(os.path.join(OUT, "hops.json"), "w") as f:
+                json.dump(hops, f)
+            log(f"hops: {json.dumps({k: (v['p50'], v['colo']) for k, v in hops.items()})}")
+            progress("hops")
         if "a" in cases:
             matrix_case("a", hosts[0])
             progress("a", host=hosts[0], subruns=len(modes))
