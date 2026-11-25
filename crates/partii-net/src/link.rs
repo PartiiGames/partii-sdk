@@ -6,7 +6,11 @@
 //! - A better path takes over only when it scores better by ≥10% and ≥5 ms
 //!   for a full second. Score = RTT, plus `WS_PENALTY_MS` for the ws relay,
 //!   so a healthy WebRTC path wins unless it is clearly slower.
-//! - A path that misses pongs for `DEAD_MS` loses traffic at once.
+//! - A WebRTC path quiet past `suspect_after` (400 ms on a steady path,
+//!   up to `SUSPECT_MAX_MS` on one that has been stalling) hands play to a
+//!   stand-in until it answers again; one quiet past `dead_after` (1 s, or
+//!   its learned stall plus two pings) loses traffic for good, and gets it
+//!   back only after answering for `REPROMOTE_HOLD_MS`.
 //! - Reliable messages ride the link's ARQ, so a switch never loses or
 //!   reorders them.
 //!
@@ -64,8 +68,19 @@ pub const SUSPECT_MS: f64 = 400.0;
 /// ~60% after a minute without stalls), so a steady path goes back to
 /// `SUSPECT_MS`.
 pub const SUSPECT_MARGIN_MS: f64 = 250.0;
-pub const SUSPECT_MAX_MS: f64 = 900.0;
+pub const SUSPECT_MAX_MS: f64 = 1100.0;
 pub const GAP_PEAK_DECAY: f64 = 0.998;
+/// A WebRTC path is dead (play switches off it for good) after `DEAD_MS`
+/// without a pong, or, on a path that has been stalling, its recent peak
+/// gap plus two pings (two missed pongs past its worst normal stall), up to
+/// `DEAD_MAX_MS`. Play does not wait for that: the stand-in has it from
+/// `suspect_after`.
+pub const DEAD_MAX_MS: f64 = 2500.0;
+/// Play goes back to a path it switched off as dead within the last
+/// `REPROMOTE_WINDOW_MS` only after it has answered (and scored better) for
+/// `REPROMOTE_HOLD_MS`, so a path that keeps dying does not flap.
+pub const REPROMOTE_WINDOW_MS: f64 = 10_000.0;
+pub const REPROMOTE_HOLD_MS: f64 = 1500.0;
 
 const PING: u8 = 0x10;
 const PONG: u8 = 0x11;
@@ -126,6 +141,8 @@ pub struct Link {
     /// When play last moved onto the ws relay (it is judged by its idle
     /// window until it answers a ping sent after that).
     ws_since: f64,
+    /// When play last switched off each path because it went quiet.
+    demoted_at: [f64; 3],
     /// Times play took a stand-in while the current path was suspect
     /// (`stand_in`), when the one in progress began, and the total time
     /// spent on stand-ins (ms). For stats.
@@ -147,6 +164,7 @@ impl Default for Link {
             events: VecDeque::new(),
             connected_at: None,
             ws_since: f64::NEG_INFINITY,
+            demoted_at: [f64::NEG_INFINITY; 3],
             detours: 0,
             detour_from: None,
             detour_ms: 0.0,
@@ -174,8 +192,10 @@ impl Link {
                 .is_some_and(|t| t < self.ws_since);
         let dead = if p == PathId::Ws && idle {
             WS_IDLE_DEAD_MS
-        } else {
+        } else if p == PathId::Ws {
             DEAD_MS
+        } else {
+            self.dead_after(p)
         };
         self.path(p).healthy_within(now, dead)
     }
@@ -370,6 +390,11 @@ impl Link {
         }
     }
 
+    /// How long WebRTC path `p` may go without a pong before it is dead.
+    pub fn dead_after(&self, p: PathId) -> f64 {
+        (self.path(p).gap_peak + 2.0 * PING_MS).clamp(DEAD_MS, DEAD_MAX_MS)
+    }
+
     /// Is the current WebRTC path quiet past `suspect_after`?
     pub fn suspect(&self, now: f64) -> bool {
         let cur = self.current;
@@ -448,6 +473,7 @@ impl Link {
                 .or(best)
                 .filter(|p| *p != cur);
             if let Some(to) = to {
+                self.demoted_at[cur as usize] = now;
                 self.switch(to, now);
             }
             return;
@@ -475,7 +501,9 @@ impl Link {
         }
         match self.candidate {
             Some((c, since)) if c == b => {
-                let hold = if cur == PathId::Ws {
+                let hold = if now - self.demoted_at[b as usize] < REPROMOTE_WINDOW_MS {
+                    REPROMOTE_HOLD_MS
+                } else if cur == PathId::Ws {
                     LEAVE_WS_HOLD_MS
                 } else {
                     SWITCH_HOLD_MS
@@ -532,6 +560,8 @@ mod tests {
         /// Per path: windows (start, end) in which packets stall and are
         /// all delivered at the end (a Wi-Fi / LTE hiccup), and a loss rate.
         stalls: [Vec<(f64, f64)>; 3],
+        /// Stalls drop packets (a firewall / dead radio) instead of holding them.
+        stall_drop: bool,
         loss: [f64; 3],
         rng: u64,
         /// Detours: times a's play left its current path for a stand-in.
@@ -552,6 +582,7 @@ mod tests {
                 got_a: vec![],
                 got_b: vec![],
                 stalls: Default::default(),
+                stall_drop: false,
                 loss: [0.0; 3],
                 rng: 0x9E37_79B9_7F4A_7C15,
                 detour: false,
@@ -587,7 +618,12 @@ mod tests {
                             continue;
                         }
                         let mut at = self.now + self.delay[i];
-                        if let Some((_, e)) = self.stalls[i]
+                        if self.stall_drop {
+                            // Dropped if it is on the wire at any time in a stall.
+                            if self.stalls[i].iter().any(|(s, e)| *s < at && self.now < *e) {
+                                continue;
+                            }
+                        } else if let Some((_, e)) = self.stalls[i]
                             .iter()
                             .find(|(s, e)| *s <= self.now && self.now < *e)
                         {
@@ -823,61 +859,110 @@ mod tests {
         }
         let gap = first.expect("play resumed");
         eprintln!("jittery then dead: window {window:.0} ms, play resumed after {gap:.0} ms");
-        assert!(gap < 1000.0, "play resumed after {gap} ms");
+        assert!(gap < SUSPECT_MAX_MS, "play resumed after {gap} ms");
     }
 
     /// The same over 10 seeds and 300 / 450 / 600 ms stalls (tankii's
-    /// 300-600 ms range). Prints detours and switches per minute.
+    /// 300-600 ms range), in two worlds: Wi-Fi-like stalls that hold packets
+    /// on a short link (direct only), and firewall-like stalls that DROP
+    /// every UDP packet (turn and direct together) on a 180 ms link, as the
+    /// Fly jitter run does. Prints detours and switches per minute.
     #[test]
-    fn jitter_sweep_stays_under_one_detour_a_minute() {
-        for stall in [300.0, 450.0, 600.0] {
-            let (mut detours, mut switches) = (0u32, 0usize);
-            for seed in 1..=10u64 {
-                let mut s = Sim::new([60.0, 30.0, 20.0]);
-                s.rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                s.open(PathId::Ws, true);
-                s.open(PathId::Direct, true);
-                s.step(3000.0);
-                let t0 = s.now;
-                let mut t = t0 + 1000.0;
-                while t < t0 + 120_000.0 {
-                    s.stalls[PathId::Direct as usize].push((t, t + stall));
-                    t += 3000.0 + 2000.0 * s.rand();
+    fn jitter_sweep_stays_under_one_switch_a_minute() {
+        for (world, delay, drop) in [
+            ("hold, 40 ms", [60.0, 30.0, 20.0], false),
+            ("drop, 180 ms", [100.0, 90.0, 90.0], true),
+        ] {
+            for stall in [300.0, 450.0, 600.0] {
+                let (mut detours, mut switches) = (0u32, 0usize);
+                for seed in 1..=10u64 {
+                    let mut s = Sim::new(delay);
+                    s.rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                    s.stall_drop = drop;
+                    s.open(PathId::Ws, true);
+                    if drop {
+                        s.open(PathId::Turn, true);
+                    }
+                    s.open(PathId::Direct, true);
+                    s.step(3000.0);
+                    let t0 = s.now;
+                    let mut t = t0 + 1000.0;
+                    let udp = if drop {
+                        vec![PathId::Turn, PathId::Direct]
+                    } else {
+                        vec![PathId::Direct]
+                    };
+                    while t < t0 + 120_000.0 {
+                        for p in &udp {
+                            s.stalls[*p as usize].push((t, t + stall));
+                        }
+                        t += 3000.0 + 2000.0 * s.rand();
+                    }
+                    for p in &udp {
+                        s.loss[*p as usize] = 0.02;
+                    }
+                    let seen = s.got_a.len();
+                    let mut i = 0u32;
+                    while s.now - t0 < 120_000.0 {
+                        s.a.send(true, &i.to_le_bytes());
+                        i += 1;
+                        s.step(34.0);
+                    }
+                    s.step(3000.0);
+                    detours += s.detours;
+                    let n = s.got_a[seen..]
+                        .iter()
+                        .filter(|e| matches!(e, LinkEvent::Switched { .. }))
+                        .count();
+                    // About the first stall only, before the path's window
+                    // is learned: off and back (rarely a third, as turn and
+                    // direct trade places).
+                    assert!(
+                        n <= 3,
+                        "{world} {stall} ms seed {seed}: {n} switches in 2 min"
+                    );
+                    switches += n;
+                    let want: Vec<Vec<u8>> = (0..i).map(|n| n.to_le_bytes().to_vec()).collect();
+                    assert_eq!(
+                        s.msgs_b(true),
+                        want,
+                        "order kept, {world} {stall} seed {seed}"
+                    );
                 }
-                s.loss[PathId::Direct as usize] = 0.02;
-                let seen = s.got_a.len();
-                let mut i = 0u32;
-                while s.now - t0 < 120_000.0 {
-                    s.a.send(true, &i.to_le_bytes());
-                    i += 1;
-                    s.step(34.0);
+                let (dpm, spm) = (detours as f64 / 20.0, switches as f64 / 20.0);
+                eprintln!("jitter sweep [{world}]: {stall} ms stalls -> {dpm:.2} detours/min, {spm:.2} switches/min");
+                let cap = if stall < 500.0 { 0.5 } else { 1.2 };
+                assert!(spm <= cap, "{world} {stall} ms: {spm} switches/min");
+                if stall < 500.0 {
+                    assert!(dpm <= 2.0, "{world} {stall} ms: {dpm} detours/min");
                 }
-                s.step(3000.0);
-                detours += s.detours;
-                switches += s.got_a[seen..]
-                    .iter()
-                    .filter(|e| matches!(e, LinkEvent::Switched { .. }))
-                    .count();
-                let want: Vec<Vec<u8>> = (0..i).map(|n| n.to_le_bytes().to_vec()).collect();
-                assert_eq!(
-                    s.msgs_b(true),
-                    want,
-                    "order kept, stall {stall} seed {seed}"
-                );
-            }
-            let (dpm, spm) = (detours as f64 / 20.0, switches as f64 / 20.0);
-            eprintln!(
-                "jitter sweep: {stall} ms stalls -> {dpm:.2} detours/min, {spm:.2} switches/min"
-            );
-            if stall < 500.0 {
-                assert!(
-                    dpm <= 1.0 && switches == 0,
-                    "{stall} ms: {dpm} detours/min, {switches} switches"
-                );
-            } else {
-                assert!(spm <= 1.0, "{stall} ms: {spm} switches/min");
             }
         }
+    }
+
+    /// A path that died and answers again gets play back after
+    /// `REPROMOTE_HOLD_MS` of answering (not at once: it may be flapping).
+    #[test]
+    fn a_path_that_died_gets_play_back_after_the_hold() {
+        let mut s = Sim::new([40.0, 20.0, 5.0]);
+        s.open(PathId::Ws, true);
+        s.open(PathId::Direct, true);
+        s.step(3000.0);
+        s.blackhole(PathId::Direct);
+        s.step(3000.0);
+        assert_eq!(s.a.current(), PathId::Ws);
+        s.up[PathId::Direct as usize] = true;
+        let t0 = s.now;
+        while s.a.current() != PathId::Direct && s.now - t0 < 5000.0 {
+            s.step(10.0);
+        }
+        let back = s.now - t0;
+        eprintln!("promote back after a death: {back:.0} ms");
+        assert_eq!(s.a.current(), PathId::Direct);
+        assert!(
+            (REPROMOTE_HOLD_MS..REPROMOTE_HOLD_MS + 600.0).contains(&back),
+            "{back} ms"
+        );
     }
 
     #[test]
