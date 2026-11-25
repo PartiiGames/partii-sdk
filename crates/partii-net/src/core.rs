@@ -466,7 +466,9 @@ impl Core {
                         (id.name().to_string(), json!({"open": s.open, "rtt": s.rtt, "pings": s.pings, "pongs": s.pongs, "ice": ice}))
                     })
                     .collect();
-                (mid.to_string(), json!({"current": p.link.current(), "retransmits": p.link.retransmits(), "paths": paths}))
+                (mid.to_string(), json!({"current": p.link.current(), "retransmits": p.link.retransmits(),
+                    "detours": p.link.detours, "detour_ms": p.link.detour_ms.round(),
+                    "suspect_after_ms": p.link.suspect_after(), "paths": paths}))
             })
             .collect();
         json!({"online": self.online(), "relay": self.relay, "topology": self.topology.as_str(), "peers": peers})

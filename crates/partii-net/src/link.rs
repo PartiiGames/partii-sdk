@@ -126,6 +126,12 @@ pub struct Link {
     /// When play last moved onto the ws relay (it is judged by its idle
     /// window until it answers a ping sent after that).
     ws_since: f64,
+    /// Times play took a stand-in while the current path was suspect
+    /// (`stand_in`), when the one in progress began, and the total time
+    /// spent on stand-ins (ms). For stats.
+    pub detours: u64,
+    detour_from: Option<f64>,
+    pub detour_ms: f64,
 }
 
 impl Default for Link {
@@ -141,6 +147,9 @@ impl Default for Link {
             events: VecDeque::new(),
             connected_at: None,
             ws_since: f64::NEG_INFINITY,
+            detours: 0,
+            detour_from: None,
+            detour_ms: 0.0,
             allowed: [true; 3],
         }
     }
@@ -312,7 +321,19 @@ impl Link {
         }
         // A suspect WebRTC path keeps its pings (they tell when it is back)
         // but play goes over the ws relay meanwhile.
-        let cur = self.stand_in(now).unwrap_or(cur);
+        let stand_in = self.stand_in(now);
+        match (stand_in.is_some(), self.detour_from) {
+            (true, None) => {
+                self.detours += 1;
+                self.detour_from = Some(now);
+            }
+            (false, Some(t)) => {
+                self.detour_ms += now - t;
+                self.detour_from = None;
+            }
+            _ => {}
+        }
+        let cur = stand_in.unwrap_or(cur);
         for b in self.unrel.drain(..) {
             let mut d = Vec::with_capacity(b.len() + 1);
             d.push(UNREL);

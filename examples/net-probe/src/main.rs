@@ -6,7 +6,12 @@
 //!                  [--hz 30] [--block-udp]
 //!                  [--blackhole webrtc|turn|direct|current --blackhole-at 20 --restore-at 40
 //!                   --blackhole-mode app|iptables]
+//!                  [--jitter 450 --jitter-from 10 --jitter-loss 0.02]
 //! ```
+//!
+//! `--jitter MS` makes the WebRTC paths alive but jittery (iptables, needs
+//! root): from `--jitter-from` s on, all UDP stalls for MS every 3-5 s and
+//! `--jitter-loss` of incoming UDP is dropped. The ws relay is untouched.
 //!
 //! Env: `PARTII_KEY` (a publishable key; never printed), `PARTII_EDGE`
 //! (default: staging). The host creates a star room and echoes everything;
@@ -37,6 +42,9 @@ struct Args {
     blackhole_at: f64,
     restore_at: f64,
     blackhole_mode: String,
+    jitter: Option<f64>,
+    jitter_from: f64,
+    jitter_loss: f64,
     label: String,
 }
 
@@ -53,6 +61,9 @@ fn args() -> Args {
         blackhole_at: 20.0,
         restore_at: 40.0,
         blackhole_mode: "app".into(),
+        jitter: None,
+        jitter_from: 10.0,
+        jitter_loss: 0.02,
         label: String::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -70,6 +81,9 @@ fn args() -> Args {
             "--blackhole-at" => a.blackhole_at = v().parse().unwrap_or(a.blackhole_at),
             "--restore-at" => a.restore_at = v().parse().unwrap_or(a.restore_at),
             "--blackhole-mode" => a.blackhole_mode = v(),
+            "--jitter" => a.jitter = v().parse().ok(),
+            "--jitter-from" => a.jitter_from = v().parse().unwrap_or(a.jitter_from),
+            "--jitter-loss" => a.jitter_loss = v().parse().unwrap_or(a.jitter_loss),
             "--label" => a.label = v(),
             _ => {
                 eprintln!("net-probe: unknown argument {k}");
@@ -190,6 +204,87 @@ fn iptables_udp(on: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Random loss on incoming UDP (`p` of 1), v4 and v6. Needs root.
+fn iptables_udp_loss(on: bool, p: f64) -> Result<(), String> {
+    let op = if on { "-I" } else { "-D" };
+    let prob = format!("{p}");
+    for bin in ["iptables", "ip6tables"] {
+        let r = [
+            op,
+            "INPUT",
+            "-p",
+            "udp",
+            "-m",
+            "statistic",
+            "--mode",
+            "random",
+            "--probability",
+            &prob,
+            "-j",
+            "DROP",
+        ];
+        match Command::new(bin).args(r).status() {
+            Ok(s) if s.success() || !on => {}
+            Ok(s) => return Err(format!("{bin} {}: {s}", r.join(" "))),
+            Err(e) if on => return Err(format!("{bin}: {e}")),
+            Err(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// The jitter script on its own thread (iptables calls take a few ms each
+/// and must not hold up the send loop). Returns the stalls it made, as
+/// (start, end) ms since `t0`.
+fn jitter_thread(
+    t0: Instant,
+    stall: f64,
+    from_s: f64,
+    loss: f64,
+    end_ms: f64,
+) -> std::thread::JoinHandle<(Vec<(f64, f64)>, Vec<String>)> {
+    std::thread::spawn(move || {
+        let mut stalls = Vec::new();
+        let mut errors = Vec::new();
+        let mut rng: u64 = 0x9E37_79B9_7F4A_7C15 ^ (std::process::id() as u64);
+        let mut rand = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let wait_until = |t: f64| {
+            let now = ms(t0);
+            if t > now {
+                std::thread::sleep(Duration::from_secs_f64((t - now) / 1000.0));
+            }
+        };
+        wait_until(from_s * 1000.0);
+        if loss > 0.0 {
+            if let Err(m) = iptables_udp_loss(true, loss) {
+                errors.push(format!("jitter loss: {m}"));
+            }
+        }
+        let mut t = ms(t0) + 1000.0;
+        while t + stall < end_ms - 2000.0 {
+            wait_until(t);
+            let a = ms(t0);
+            if let Err(m) = iptables_udp(true) {
+                errors.push(format!("jitter stall: {m}"));
+                break;
+            }
+            wait_until(a + stall);
+            let _ = iptables_udp(false);
+            stalls.push((a, ms(t0)));
+            t = a + 3000.0 + 2000.0 * rand();
+        }
+        if loss > 0.0 {
+            let _ = iptables_udp_loss(false, loss);
+        }
+        (stalls, errors)
+    })
 }
 
 fn engine(path: &str) -> Engine {
@@ -377,6 +472,9 @@ fn member(a: &Args) {
     let mut hole_path_before: Option<PathId> = None;
     let mut seq: u32 = 0;
     let fail_join_ms = 20_000.0;
+    let jitter = a
+        .jitter
+        .map(|stall| jitter_thread(t0, stall, a.jitter_from, a.jitter_loss, end_ms));
     loop {
         let now = ms(t0);
         if now >= end_ms {
@@ -521,6 +619,53 @@ fn member(a: &Args) {
         std::thread::sleep(Duration::from_millis(1));
     }
     let stats = e.stats();
+    let jitter = jitter.map(|h| {
+        let (stalls, errs) = h.join().unwrap_or_default();
+        errors.extend(errs);
+        let from = stalls.first().map(|s| s.0).unwrap_or(end_ms);
+        let mins = ((end_ms - from) / 60_000.0).max(1e-9);
+        let n_sw = switches
+            .iter()
+            .filter(|s| s["t_ms"].as_f64().is_some_and(|t| t >= from) && s["first"].is_null())
+            .count();
+        let held: Vec<f64> = stalls.iter().map(|(a, b)| (b - a).round()).collect();
+        // Longest echo gap inside each stall window (+1 s after it).
+        let mut gaps: Vec<f64> = stalls
+            .iter()
+            .map(|(a0, b0)| {
+                let mut prev = echo_times
+                    .iter()
+                    .copied()
+                    .filter(|t| *t <= *a0)
+                    .last()
+                    .unwrap_or(*a0);
+                let mut g = 0f64;
+                for t in echo_times
+                    .iter()
+                    .copied()
+                    .filter(|t| *t > *a0 && *t <= b0 + 1000.0)
+                {
+                    g = g.max(t - prev);
+                    prev = t;
+                }
+                g.round()
+            })
+            .collect();
+        gaps.sort_by(|a, b| a.total_cmp(b));
+        let peer = stats["peers"]
+            .as_object()
+            .and_then(|m| m.values().next())
+            .cloned()
+            .unwrap_or(Value::Null);
+        json!({
+            "stall_ms": a.jitter, "loss": a.jitter_loss, "stalls": stalls.len(), "held_ms": held,
+            "minutes": (mins * 100.0).round() / 100.0,
+            "switches": n_sw, "switches_per_min": ((n_sw as f64 / mins) * 100.0).round() / 100.0,
+            "detours": peer["detours"], "detour_ms": peer["detour_ms"],
+            "suspect_after_ms": peer["suspect_after_ms"],
+            "echo_gap_in_stall_p50": pct(&gaps, 0.5), "echo_gap_in_stall_max": gaps.last(),
+        })
+    });
     // Let the last reliable echoes land before judging the stream.
     let tail_deadline = Instant::now() + Duration::from_millis(3000);
     while rel_next < rel_sent && Instant::now() < tail_deadline {
@@ -644,7 +789,7 @@ fn member(a: &Args) {
         "reliable": {"sent": rel_sent, "received": rel_next, "missing": rel_sent.saturating_sub(rel_next),
             "out_of_order": rel_out_of_order, "max_rtt_ms": (rel_max_delay * 10.0).round() / 10.0,
             "p50": pct(&rel_delays, 0.5), "p99": pct(&rel_delays, 0.99)},
-        "switches": switches, "failover": failover, "errors": errors, "stats": stats,
+        "switches": switches, "failover": failover, "jitter": jitter, "errors": errors, "stats": stats,
     });
     println!("{out}");
 }
