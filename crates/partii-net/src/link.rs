@@ -78,8 +78,13 @@ pub const GAP_PEAK_DECAY: f64 = 0.998;
 pub const DEAD_MAX_MS: f64 = 2500.0;
 /// Play goes back to a path it switched off as dead within the last
 /// `REPROMOTE_WINDOW_MS` only after it has answered (and scored better) for
-/// `REPROMOTE_HOLD_MS`, so a path that keeps dying does not flap.
+/// `REPROMOTE_HOLD_MS`, so a path that keeps dying does not flap. Each
+/// further death within `REPROMOTE_FORGET_MS` doubles the window (up to
+/// `REPROMOTE_WINDOW_MAX_MS`), and while it runs any other healthy path is
+/// preferred to it.
 pub const REPROMOTE_WINDOW_MS: f64 = 10_000.0;
+pub const REPROMOTE_WINDOW_MAX_MS: f64 = 120_000.0;
+pub const REPROMOTE_FORGET_MS: f64 = 180_000.0;
 pub const REPROMOTE_HOLD_MS: f64 = 1500.0;
 /// After a stall (a pong gap past `SUSPECT_MS`) a path's RTT runs high for
 /// a while (queues drain, SCTP backs off), so for `SETTLE_MS` play does not
@@ -150,6 +155,7 @@ pub struct Link {
     ws_since: f64,
     /// When play last switched off each path because it went quiet.
     demoted_at: [f64; 3],
+    demotions: [u32; 3],
     /// Times play took a stand-in while the current path was suspect
     /// (`stand_in`), when the one in progress began, and the total time
     /// spent on stand-ins (ms). For stats.
@@ -172,6 +178,7 @@ impl Default for Link {
             connected_at: None,
             ws_since: f64::NEG_INFINITY,
             demoted_at: [f64::NEG_INFINITY; 3],
+            demotions: [0; 3],
             detours: 0,
             detour_from: None,
             detour_ms: 0.0,
@@ -400,6 +407,16 @@ impl Link {
         }
     }
 
+    /// Did play switch off `p` as dead lately (`REPROMOTE_WINDOW_MS`,
+    /// doubled for each further death)?
+    fn on_probation(&self, p: PathId, now: f64) -> bool {
+        let i = p as usize;
+        let n = self.demotions[i].max(1) - 1;
+        let window =
+            (REPROMOTE_WINDOW_MS * 2f64.powi(n.min(8) as i32)).min(REPROMOTE_WINDOW_MAX_MS);
+        now - self.demoted_at[i] < window
+    }
+
     /// How long WebRTC path `p` may go without a pong before it is dead.
     pub fn dead_after(&self, p: PathId) -> f64 {
         (self.path(p).gap_peak + 2.0 * PING_MS).clamp(DEAD_MS, DEAD_MAX_MS)
@@ -457,14 +474,20 @@ impl Link {
                 .rtt
                 .map(|r| r + if p == PathId::Ws { WS_PENALTY_MS } else { 0.0 })
         };
-        let best = PathId::ALL
-            .into_iter()
-            .filter(|p| *p != cur && self.alive(*p, now))
-            .min_by(|a, b| {
-                score(*a)
-                    .unwrap_or(f64::MAX)
-                    .total_cmp(&score(*b).unwrap_or(f64::MAX))
-            });
+        let pick = |on_probation: bool| {
+            PathId::ALL
+                .into_iter()
+                .filter(|p| {
+                    *p != cur && self.alive(*p, now) && self.on_probation(*p, now) == on_probation
+                })
+                .min_by(|a, b| {
+                    score(*a)
+                        .unwrap_or(f64::MAX)
+                        .total_cmp(&score(*b).unwrap_or(f64::MAX))
+                })
+        };
+        // A path that died lately comes after every other healthy one.
+        let best = pick(false).or_else(|| pick(true));
         if !cur_ok {
             // Fail over now: the best measured path that is still answering,
             // else the ws relay. A WebRTC path quiet past SUSPECT_MS usually
@@ -483,7 +506,12 @@ impl Link {
                 .or(best)
                 .filter(|p| *p != cur);
             if let Some(to) = to {
-                self.demoted_at[cur as usize] = now;
+                let i = cur as usize;
+                if now - self.demoted_at[i] > REPROMOTE_FORGET_MS {
+                    self.demotions[i] = 0;
+                }
+                self.demotions[i] += 1;
+                self.demoted_at[i] = now;
                 self.switch(to, now);
             }
             return;
@@ -522,7 +550,7 @@ impl Link {
         }
         match self.candidate {
             Some((c, since)) if c == b => {
-                let hold = if now - self.demoted_at[b as usize] < REPROMOTE_WINDOW_MS {
+                let hold = if self.on_probation(b, now) {
                     REPROMOTE_HOLD_MS
                 } else if cur == PathId::Ws {
                     LEAVE_WS_HOLD_MS
@@ -988,6 +1016,50 @@ mod tests {
             (REPROMOTE_HOLD_MS..REPROMOTE_HOLD_MS + 600.0).contains(&back),
             "{back} ms"
         );
+    }
+
+    /// Fly jitter run 3, gru: turn scored best but kept dying (1-2 s
+    /// blackouts), direct was healthy and a little slower. Play went ws ->
+    /// turn -> ws every 10 s. A path that keeps dying stays on probation
+    /// longer each time, and any healthy path beats it meanwhile.
+    #[test]
+    fn a_fast_path_that_keeps_dying_loses_play_for_longer_each_time() {
+        let mut s = Sim::new([80.0, 70.0, 80.0]);
+        s.stall_drop = true;
+        s.open(PathId::Ws, true);
+        s.open(PathId::Turn, true);
+        s.open(PathId::Direct, true);
+        s.step(3000.0);
+        assert_eq!(s.a.current(), PathId::Turn);
+        let t0 = s.now;
+        let mut t = t0 + 2000.0;
+        while t < t0 + 120_000.0 {
+            s.stalls[PathId::Turn as usize].push((t, t + 1500.0));
+            t += 8000.0 + 4000.0 * s.rand();
+        }
+        let seen = s.got_a.len();
+        let mut i = 0u32;
+        while s.now - t0 < 120_000.0 {
+            s.a.send(true, &i.to_le_bytes());
+            i += 1;
+            s.step(34.0);
+        }
+        s.step(3000.0);
+        let sw: Vec<(PathId, PathId)> = s.got_a[seen..]
+            .iter()
+            .filter_map(|e| match e {
+                LinkEvent::Switched { from, to, .. } => Some((*from, *to)),
+                _ => None,
+            })
+            .collect();
+        eprintln!("dying fast path: {} switches in 2 min: {sw:?}", sw.len());
+        assert!(
+            sw.iter().all(|(_, to)| *to != PathId::Ws),
+            "a healthy direct path takes play, not ws"
+        );
+        assert!(sw.len() <= 6, "{} switches", sw.len());
+        let want: Vec<Vec<u8>> = (0..i).map(|n| n.to_le_bytes().to_vec()).collect();
+        assert_eq!(s.msgs_b(true), want);
     }
 
     #[test]
